@@ -211,3 +211,45 @@ def test_replacements_are_free_during_the_event(admin, base):
     for person in people:
         for shift in admin.get(f"{base}/volunteers/{person['code']}").json()["shift_list"]:
             assert datetime.fromisoformat(shift["end_at"]) <= start or datetime.fromisoformat(shift["start_at"]) >= end
+
+
+
+def test_accommodation_pipeline_and_decision_queue_reconcile(admin, base):
+    s = admin.get(f"{base}/accommodation/summary").json()
+    p = s["pipeline"]
+    assert p["requested_total"] == p["need_bed"] + p["allocated"] + p["checked_in"]
+    assert p["need_bed"] == p["blocked"] + p["ready_to_place"]
+    assert s["budget_gauge"]["approved"] > 0
+    assert s["budget_gauge"]["budget_held_count"] > 0
+    assert s["budget_gauge"]["extra_needed_for_open_beds"] > 0
+    assert len(s["decision_queue"]) >= 4
+
+
+def test_housing_preference_preserves_gender_as_given_and_outreach_logs(admin, base):
+    with SessionLocal() as db:
+        code = db.execute(text("SELECT code FROM participants WHERE gender_as_given IS NULL AND accommodation_required LIMIT 1")).scalar_one()
+    res = admin.post(f"{base}/accommodation/housing-preference", json={"participant_codes": [code], "housing_preference": "gender_neutral", "note": "Direct reply"})
+    assert res.status_code == 200 and res.json()["updated"] == 1
+    with SessionLocal() as db:
+        gender, pref = db.execute(text("SELECT gender_as_given, housing_preference FROM participants WHERE code=:c"), {"c": code}).one()
+        assert gender is None and pref == "gender_neutral"
+    admin.post(f"{base}/accommodation/housing-preference", json={"participant_codes": [code], "housing_preference": "clear"})
+    csv_res = admin.get(f"{base}/accommodation/housing-outreach.csv")
+    assert csv_res.status_code == 200 and "DIRECT_TO_PARTICIPANT_ONLY_NEVER_VIA_CONTINGENT_LEADER" in csv_res.text
+
+
+def test_external_accessibility_call_sheet_and_contingent_sheet(admin, base):
+    before_summary = admin.get(f"{base}/accommodation/summary").json()
+    before_access_held = sum(item["count"] for item in before_summary["decision_queue"] if item["key"] in ("access_exhausted", "access_gendered"))
+    res = admin.post(f"{base}/accommodation/hostels/EXT06/accessibility-call-sheet", json={
+        "step_free_entry": True, "ground_floor_rooms": 10, "accessible_bathrooms": 10, "has_lift": True, "confirmed_by": "Desk Manager",
+    })
+    assert res.status_code == 200 and res.json()["accessibility_status"] == "declared"
+    # With EXT06 declared accessible (10 beds), 10 wheelchair participants now match EXT06 instead of being held for no accessible bed!
+    after_summary = admin.get(f"{base}/accommodation/summary").json()
+    after_access_held = sum(item["count"] for item in after_summary["decision_queue"] if item["key"] in ("access_exhausted", "access_gendered"))
+    assert after_access_held == before_access_held - 10
+    # Reset EXT06 back to unknown
+    admin.post(f"{base}/accommodation/hostels/EXT06/accessibility-call-sheet", json={"confirmed_by": "Reset", "reset_unknown": True})
+    cont = admin.get(f"{base}/accommodation/contingents/C01").json()
+    assert cont["code"] == "C01" and cont["counts"]["requested"] == cont["counts"]["placed"] + cont["counts"]["waiting"]
