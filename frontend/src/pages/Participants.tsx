@@ -14,13 +14,15 @@ interface Row {
   code: string; full_name: string; college: string; department: string | null; age: number | null; registration_status: string;
   checkin_status: string; accommodation_required: boolean | null; transport_required: boolean | null; event_count: number;
   email: string | null; phone: string | null; gender_as_given: string | null; accessibility_needs: string | null; dietary_needs: string | null;
-  arrival_at: string | null; departure_at: string | null; tshirt_size: string | null; has_pass: boolean; restricted: boolean;
+  arrival_at: string | null; departure_at: string | null; tshirt_size: string | null; has_pass: boolean; restricted: boolean; unready: boolean;
 }
+interface Readiness { key: string; severity: "critical" | "high" | "medium"; title: string; detail: string }
 interface Detail extends Row {
   events: { code: string; name: string; start_at: string | null; venue: string | null; team_code: string | null; clashes: string[]; off_campus: boolean }[];
   contingent: { code: string; college: string; leader: string | null } | null;
   accommodation: { room: string; hostel: string; status: string } | null;
   transport: { code: string; name: string; departure_at: string; status: string }[];
+  readiness: Readiness[];
   issues: { issue: string; detail: string | null }[];
   merch: { item: string; issued_at: string; issued_by: string | null }[];
   merged_from: string[];
@@ -206,6 +208,11 @@ function ParticipantDetail({ code, options, onClose }: { code: string; options?:
               {can("participants.write") && <><button className="button-ghost" onClick={() => setView("edit")}>Edit</button><button className="button-ghost danger" onClick={() => setView("delete")}>Remove</button></>}
             </div>
             {p.merged_from.length > 0 && <p className="muted small">Merged from {p.merged_from.join(", ")}</p>}
+            {p.readiness.length > 0
+              ? (<><h3>Not ready ({p.readiness.length})</h3><ul className="stack">{p.readiness.map((r) => (
+                  <li key={r.key}><div><Pill value={r.title} tone={r.severity === "medium" ? "warn" : "bad"} /><br /><span className="muted small">{r.detail}</span></div></li>
+                ))}</ul></>)
+              : <p className="muted small">Ready: no conflicts across events, stay, bed or team.</p>}
             <h3>Their festival</h3>
             <Journey p={p} />
             <h3>Record</h3>
@@ -278,7 +285,7 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
 
 const columns: Column<Row>[] = [
   { label: "ID", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
-  { label: "Name", sort: "name", cell: (r) => <strong>{r.full_name}</strong> },
+  { label: "Name", sort: "name", cell: (r) => <>{<strong>{r.full_name}</strong>}{r.unready && <> <Pill value="not ready" tone="warn" /></>}</> },
   { label: "College", sort: "college", cell: (r) => r.college },
   { label: "Events", sort: "events", cell: (r) => r.event_count, className: "num" },
   { label: "Accommodation", sort: "accommodation", cell: (r) => yesNo(r.accommodation_required) },
@@ -290,7 +297,7 @@ export function Participants() {
   const { base, can } = useFest();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({ contingent: "", event: "", accommodation: "", checkin: "", status: "", flagged: params.has("flagged") });
+  const [filters, setFilters] = useState({ contingent: "", event: "", accommodation: "", checkin: "", status: "", flagged: params.has("flagged"), unready: params.has("unready") });
   const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const [dialog, setDialog] = useState<"add" | "import" | "duplicates" | null>(params.has("duplicates") ? "duplicates" : null);
@@ -318,6 +325,7 @@ export function Participants() {
         <select aria-label="Check-in" value={filters.checkin} onChange={update("checkin")}><option value="">Check-in: any</option><option value="not_arrived">Not arrived</option><option value="checked_in">Checked in</option></select>
         <select aria-label="Registration status" value={filters.status} onChange={update("status")}><option value="">Status: any</option><option value="registered">Registered</option><option value="confirmed">Confirmed</option><option value="cancelled">Cancelled</option></select>
         <label className="check"><input type="checkbox" checked={filters.flagged} onChange={(e) => setFilters({ ...filters, flagged: e.target.checked })} /> Needs review</label>
+        <label className="check"><input type="checkbox" checked={filters.unready} onChange={(e) => setFilters({ ...filters, unready: e.target.checked })} /> Not ready</label>
       </div>
       <QueryState query={query}>
         {query.data && (

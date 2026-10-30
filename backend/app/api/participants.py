@@ -25,6 +25,7 @@ from app.models import (
 from app.services.audit import record
 from app.services.events import participant_clashes
 from app.services.pack_import import IST
+from app.services.readiness import participant_readiness, unready_among, unready_clause
 
 router = APIRouter(prefix="/api/festivals/{festival_id}", tags=["participants"])
 
@@ -103,7 +104,7 @@ def serialize(p: Participant, sensitive: bool, event_count: int | None = None) -
 
 
 def filtered(festival_id: int, q: str | None, college: str | None, contingent: str | None, accommodation: str | None,
-             checkin: str | None, status: str | None, event: str | None, flagged: bool):
+             checkin: str | None, status: str | None, event: str | None, flagged: bool, unready: bool = False):
     query = select(Participant).where(Participant.festival_id == festival_id, Participant.deleted_at.is_(None))
     if q:
         term = like(q)
@@ -129,16 +130,19 @@ def filtered(festival_id: int, q: str | None, college: str | None, contingent: s
         query = query.where(Participant.code.in_(
             select(DataIssue.entity_code).where(DataIssue.festival_id == festival_id, DataIssue.entity_type == "participant",
                                                 DataIssue.status == "open")))
+    if unready:
+        query = query.where(unready_clause())
     return query.order_by(Participant.code)
 
 
 @router.get("/participants", dependencies=[Depends(require("participants.read"))])
 def list_participants(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), college: str | None = None,
                       contingent: str | None = None, accommodation: str | None = None, checkin: str | None = None,
-                      status: str | None = None, event: str | None = None, flagged: bool = False, sort: str | None = None,
+                      status: str | None = None, event: str | None = None, flagged: bool = False, unready: bool = False,
+                      sort: str | None = None,
                       festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
     sensitive = "participants.read_sensitive" in permissions_of(user)
-    query = filtered(festival.id, q, college, contingent, accommodation, checkin, status, event, flagged).order_by(None)
+    query = filtered(festival.id, q, college, contingent, accommodation, checkin, status, event, flagged, unready).order_by(None)
     events = select(func.count()).where(Registration.participant_id == Participant.id).scalar_subquery()
     query = ordered(query, sort, {"code": Participant.code, "name": Participant.full_name, "college": Participant.college, "events": events,
                                   "accommodation": Participant.accommodation_required, "registration": Participant.registration_status,
@@ -149,8 +153,10 @@ def list_participants(page: int = Query(1, ge=1), q: str | None = Query(None, ma
                              .join(Registration, Registration.participant_id == Participant.id)
                              .where(Participant.festival_id == festival.id, Participant.code.in_(codes))
                              .group_by(Participant.code)).all())
+    unready_set = unready_among(db, festival.id, codes)
     for row in result["items"]:
         row["event_count"] = counts.get(row["code"], 0)
+        row["unready"] = row["code"] in unready_set
     return result
 
 
@@ -169,14 +175,15 @@ EXPORT_COLUMNS = ["code", "full_name", "college", "department", "age", "registra
 @router.get("/participants/export.csv", dependencies=[Depends(require("participants.read"))])
 def export_participants(q: str | None = None, college: str | None = None, contingent: str | None = None,
                         accommodation: str | None = None, checkin: str | None = None, status: str | None = None,
-                        event: str | None = None, flagged: bool = False, festival: Festival = Depends(festival_access),
+                        event: str | None = None, flagged: bool = False, unready: bool = False,
+                        festival: Festival = Depends(festival_access),
                         user: User = Depends(current_user), db: Session = Depends(get_db)):
     sensitive = "participants.read_sensitive" in permissions_of(user)
     columns = EXPORT_COLUMNS + (list(SENSITIVE) if sensitive else [])
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(columns)
-    rows = db.scalars(filtered(festival.id, q, college, contingent, accommodation, checkin, status, event, flagged))
+    rows = db.scalars(filtered(festival.id, q, college, contingent, accommodation, checkin, status, event, flagged, unready))
     count = 0
     for p in rows:
         writer.writerow([csv_safe(getattr(p, c)) for c in columns])
@@ -453,6 +460,7 @@ def get_participant(code: str, festival: Festival = Depends(festival_access), us
     row["merged_from"] = list(db.scalars(select(Participant.code).where(Participant.merged_into_id == p.id).order_by(Participant.code)))
     row["issues"] = [{"issue": i.issue, "detail": i.detail} for i in db.scalars(
         select(DataIssue).where(DataIssue.festival_id == festival.id, DataIssue.entity_type == "participant", DataIssue.entity_code == code, DataIssue.status == "open"))]
+    row["readiness"] = participant_readiness(db, p)
     return row
 
 

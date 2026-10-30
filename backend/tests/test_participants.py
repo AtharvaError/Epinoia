@@ -104,6 +104,20 @@ def test_audit_never_stores_sensitive_values(admin, base, person):
     assert logged and all("Private detail" not in row for row in logged)
 
 
+def test_readiness_flags_conflicts_and_filters(admin, base, person):
+    # A person who needs a bed but has none is not ready.
+    assert admin.patch(f"{base}/participants/{person}", json={"full_name": "Test Person", "college": "Test College", "accommodation_required": True}).status_code == 200
+    detail = admin.get(f"{base}/participants/{person}").json()
+    assert "needs_bed" in [r["key"] for r in detail["readiness"]]
+    # The list flags the row and the filter returns it.
+    listed = admin.get(f"{base}/participants", params={"unready": "true", "q": person}).json()
+    row = next(r for r in listed["items"] if r["code"] == person)
+    assert row["unready"] is True
+    # Resolving the only conflict makes them ready again.
+    assert admin.patch(f"{base}/participants/{person}", json={"full_name": "Test Person", "college": "Test College", "accommodation_required": False}).status_code == 200
+    assert admin.get(f"{base}/participants/{person}").json()["readiness"] == []
+
+
 def test_csv_import_keeps_good_rows_and_reports_bad_ones(admin, base, person):
     csv_file = f"full_name,college,phone\nImport One,Import College,+91-7000000101\nx,Import College,\nImport Dup,Import College,{PHONE}\n"
     result = admin.post(f"{base}/participants/import", files={"file": ("people.csv", csv_file)}).json()

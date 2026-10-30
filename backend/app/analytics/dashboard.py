@@ -11,6 +11,7 @@ from app.services.equipment import equipment_gaps
 from app.services.events import outside_venue_hours, venue_conflicts
 from app.services.food import coverage, diet_counts
 from app.services.pack_import import IST
+from app.services.readiness import unready_count
 from app.services.schedule_plan import SUITABLE_VENUES, TURNAROUND
 
 
@@ -208,6 +209,12 @@ def alerts(db: Session, f: int, festival: Festival, events: list[dict[str, Any]]
     if gaps:
         add("high", "Venues", f"{len({g['code'] for g in gaps})} events are short of equipment", f"Worst shortage: {gaps[0]['item']} for {gaps[0]['name']}.", "pack",
             link("See equipment gaps", "/events", "events.read", tab="conflicts"))
+
+    unready = unready_count(db, f)
+    if unready:
+        add("high", "Participants", f"{unready:,} participants are not ready",
+            "Each has a conflict across their events, stay, bed or team that needs resolving before the festival.", "generated",
+            link("Review who is not ready", "/participants", "participants.read", unready=1))
 
     duplicates = _one(db, "SELECT count(*) FROM data_issues WHERE festival_id=:f AND status='open' AND issue='possible_duplicate'", f=f)
     if duplicates:
