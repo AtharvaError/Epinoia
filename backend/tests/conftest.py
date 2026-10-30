@@ -9,7 +9,7 @@ from sqlalchemy.engine import make_url
 
 from app.config import settings
 
-TEST_DATABASE = "festos_test_accomodation"
+TEST_DATABASE = "festos_test"
 BACKEND = Path(__file__).resolve().parents[1]
 
 _url = make_url(settings.database_url)
