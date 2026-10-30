@@ -13,5 +13,11 @@ Keep this current — the brief rewards stated assumptions and preserved uncerta
 | 7 | Venues need 30 minutes between events for setup and teardown | brief lists setup and teardown; pack has no durations | tighter or looser schedule |
 | 8 | Food, Merchandise and Registration core members get the Volunteer role in the portal | the app has no matching role | they may need wider access |
 | 9 | Participants aged 17 are minors | age field | consent and housing rules may apply |
+| 10 | Male and Female participants use `boys` and `girls` rooms. Non-binary and "Prefer not to say" participants never get gendered rooms; they go to external stays, where the property sets the room | pack has no housing preference field, brief rule 2 | some may prefer a gendered room, so a person can override |
+| 11 | Only verified facilities count. A room is accessible if `accessibility=yes`; a ground-floor campus room also meets "no stairs". External stays have no accessibility data, so they do not count | brief rule 1 | 237 people are held for a personal arrangement who might fit somewhere unverified |
+| 12 | Each person holds one bed for their whole stay. Beds are not reused between people with non-overlapping stays | simplest safe reading; cleaning data is missing | reuse could reduce the 694-bed shortage |
+| 13 | External stays are used cheapest first, only if transport is not ruled out, and stop at the limit. The default limit is the simulated Hospitality budget of ₹9L | brief rule 7 | the real budget changes how many people are placed |
+| 14 | Minors get campus beds first. Any minor sent off campus is marked for review | safety, brief rule 6 | supervision needs may differ |
+| 15 | Passengers need 30 minutes from drop-off to reach an event | no travel data in the pack | affected event lists could be longer or shorter |
 
 > Add a row whenever a decision depends on something the data does not state outright.

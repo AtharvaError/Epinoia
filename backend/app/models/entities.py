@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer,
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Index, Integer,
     Numeric, String, Table, Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -208,6 +208,15 @@ class Resource(FestivalScoped, Simulated, Base):
     )
 
 
+class ResourceAllocation(FestivalScoped, Base):
+    __tablename__ = "resource_allocations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (UniqueConstraint("resource_id", "event_id"), CheckConstraint("quantity > 0", name="quantity_valid"))
+
+
 class Hostel(FestivalScoped, Base):
     __tablename__ = "hostels"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -272,6 +281,12 @@ class Route(FestivalScoped, Simulated, Base):
     departure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expected_arrival_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), server_default="scheduled")
+    delay_minutes: Mapped[int] = mapped_column(Integer, server_default="0")
+    # Approximate stop locations for the route map. NULL when a stop has no known location. Never live GPS.
+    pickup_lat: Mapped[float | None] = mapped_column(Float)
+    pickup_lng: Mapped[float | None] = mapped_column(Float)
+    destination_lat: Mapped[float | None] = mapped_column(Float)
+    destination_lng: Mapped[float | None] = mapped_column(Float)
     __table_args__ = (UniqueConstraint("festival_id", "code"),)
 
 

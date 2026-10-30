@@ -4,8 +4,9 @@ import {
   LogOut, Megaphone, Menu, Search, Settings, ShieldAlert, Users, Wallet, Warehouse, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
+import { Toasts } from "./ui";
 import { api, type Festival, type Notifications, type SearchResult, type User } from "../lib/api";
 import { formatTime } from "../lib/format";
 
@@ -19,12 +20,12 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { label: "Command Center", icon: LayoutDashboard, permission: "dashboard.read", to: "/" },
-  { label: "Events & Schedule", icon: CalendarDays, permission: "events.read", phase: 2 },
-  { label: "Participants", icon: Users, permission: "participants.read", phase: 2 },
-  { label: "Accommodation", icon: BedDouble, permission: "accommodation.read", phase: 2 },
-  { label: "Transportation", icon: Bus, permission: "transport.read", phase: 2 },
-  { label: "Volunteers", icon: HandHelping, permission: "volunteers.read", phase: 2 },
-  { label: "Venues & Resources", icon: Warehouse, permission: "venues.read", phase: 2 },
+  { label: "Events & Schedule", icon: CalendarDays, permission: "events.read", to: "/events" },
+  { label: "Participants", icon: Users, permission: "participants.read", to: "/participants" },
+  { label: "Accommodation", icon: BedDouble, permission: "accommodation.read", to: "/accommodation" },
+  { label: "Transportation", icon: Bus, permission: "transport.read", to: "/transportation" },
+  { label: "Volunteers", icon: HandHelping, permission: "volunteers.read", to: "/volunteers" },
+  { label: "Venues & Resources", icon: Warehouse, permission: "venues.read", to: "/venues" },
   { label: "Finance", icon: Wallet, permission: "finance.read", phase: 4 },
   { label: "Communication", icon: Megaphone, permission: "communication.read", phase: 4 },
   { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", phase: 4 },
@@ -85,11 +86,11 @@ function GlobalSearch({ festivalId }: { festivalId: number }) {
           {results.isError && <p className="form-error">{results.error.message}</p>}
           {results.data?.length === 0 && <p className="muted small">No matches for “{query}”.</p>}
           {results.data?.map((r) => (
-            <div key={`${r.type}-${r.code}`} className="search-row">
+            <Link key={`${r.type}-${r.code}`} className="search-row" to={`/${r.type === "Event" ? "events" : "participants"}?open=${r.code}`}>
               <span className="mono">{r.code}</span>
               <span><strong>{r.title}</strong><small>{r.subtitle}</small></span>
               <span className="tag">{r.type}</span>
-            </div>
+            </Link>
           ))}
         </div>
       )}
@@ -236,6 +237,7 @@ export function Shell({ user }: { user: User }) {
           {festival && <Outlet context={{ festival, user }} />}
         </main>
       </div>
+      <Toasts />
     </div>
   );
 }

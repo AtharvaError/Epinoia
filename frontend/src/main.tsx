@@ -9,8 +9,14 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./components/Shell";
 import { useMe } from "./lib/auth";
+import { Accommodation } from "./pages/Accommodation";
 import { CommandCenter } from "./pages/CommandCenter";
+import { Events } from "./pages/Events";
 import { Login } from "./pages/Login";
+import { Participants } from "./pages/Participants";
+import { Transport } from "./pages/Transport";
+import { Venues } from "./pages/Venues";
+import { Volunteers } from "./pages/Volunteers";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -31,6 +37,12 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/login" element={<Login />} />
           <Route element={<Protected />}>
             <Route index element={<CommandCenter />} />
+            <Route path="events" element={<Events />} />
+            <Route path="participants" element={<Participants />} />
+            <Route path="accommodation" element={<Accommodation />} />
+            <Route path="transportation" element={<Transport />} />
+            <Route path="volunteers" element={<Volunteers />} />
+            <Route path="venues" element={<Venues />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -39,9 +39,18 @@ npm run dev
 
 Open http://localhost:3000. API docs are at http://localhost:8000/api/docs.
 
+For a live demo, use the production build instead of `npm run dev`. It does not rely
+on the development server:
+
+```bash
+npm run demo
+```
+
 ## Test
 
-From `backend/`, against a seeded database:
+Run from `backend/` on freshly seeded data, using `--reset` below. Some tests expect
+that no beds are allocated yet. Tests also change demo data, so reseed again before
+a demo:
 
 ```bash
 .venv/Scripts/python -m pytest -q

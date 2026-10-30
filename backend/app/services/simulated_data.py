@@ -37,9 +37,12 @@ INCIDENTS = [
     ("Food safety", "Food Court", "Complaint about a dish served at the wrong temperature.", "high", "reported", None),
     ("Facilities", "Block B2", "Water supply interrupted on the first floor.", "medium", "resolved", "Hospitality"),
 ]
-ROUTES = [
-    ("Rail shuttle", "Indore Junction", "Campus Main Gate", 30), ("Airport shuttle", "Indore Airport", "Campus Main Gate", 45),
-    ("Campus Guest House loop", "Campus Guest House", "Campus Main Gate", 10), ("Central Residency loop", "Central Residency", "Campus Main Gate", 25),
+CAMPUS = (22.6203, 75.7992)
+ROUTES = [  # Stops with no known location have no coordinates, so the map omits them.
+    ("Rail shuttle", "Indore Junction", "Campus Main Gate", 30, (22.7176, 75.8682)),
+    ("Airport shuttle", "Indore Airport", "Campus Main Gate", 45, (22.7218, 75.8011)),
+    ("Campus Guest House loop", "Campus Guest House", "Campus Main Gate", 10, None),
+    ("Central Residency loop", "Central Residency", "Campus Main Gate", 25, None),
 ]
 TASKS = ["Confirm vendor roster", "Print signage", "Brief shift leads", "Check equipment list", "Update contact sheet",
          "Walk the venue", "Reconcile desk stock", "Publish duty chart"]
@@ -99,13 +102,15 @@ def load_simulated(db: Session, festival_id: int) -> None:
     trip = 0
     busiest: tuple[int, Route | None] = (0, None)
     for hours in range(0, 60, 6):
-        name, pickup, destination, minutes = ROUTES[trip % len(ROUTES)]
+        name, pickup, destination, minutes, stop = ROUTES[trip % len(ROUTES)]
         vehicle = vehicles[trip % len(vehicles)]
         departure = first_day + timedelta(hours=hours)
         arrival = departure + timedelta(minutes=minutes)
         trip += 1
         route = Route(festival_id=fid, code=f"TRIP{trip:02d}", name=name, pickup=pickup, destination=destination,
-                      vehicle_id=vehicle.id, departure_at=departure, expected_arrival_at=arrival, is_simulated=True)
+                      vehicle_id=vehicle.id, departure_at=departure, expected_arrival_at=arrival, is_simulated=True,
+                      pickup_lat=stop[0] if stop else None, pickup_lng=stop[1] if stop else None,
+                      destination_lat=CAMPUS[0] if stop else None, destination_lng=CAMPUS[1] if stop else None)
         db.add(route)
         db.flush()
         riders = [p for p in participants if timedelta(0) <= p.arrival_at - departure < timedelta(hours=6)][:vehicle.capacity]
@@ -115,6 +120,8 @@ def load_simulated(db: Session, festival_id: int) -> None:
             busiest = (len(riders), route)
     if busiest[1]:
         busiest[1].status = "delayed"
+        busiest[1].delay_minutes = 40
+        busiest[1].expected_arrival_at += timedelta(minutes=40)
 
     for i, (category, location, description, priority, status, team) in enumerate(INCIDENTS, 1):
         db.add(Incident(festival_id=fid, code=f"INC{i:03d}", category=category, location=location, description=description,

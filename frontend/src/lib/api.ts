@@ -1,20 +1,39 @@
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public conflicts: string[] = []) {
     super(message);
   }
 }
 
+function errorFrom(status: number, body: { detail?: unknown } | null) {
+  const detail = body?.detail;
+  if (typeof detail === "string") return new ApiError(status, detail);
+  if (Array.isArray(detail)) {
+    const first = detail[0] as { loc?: string[]; msg?: string };
+    return new ApiError(status, `${first.loc?.at(-1) ?? "Input"}: ${first.msg ?? "is not valid"}`);
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const { message, conflicts } = detail as { message: string; conflicts?: string[] };
+    return new ApiError(status, message, conflicts);
+  }
+  return new ApiError(status, "The server could not complete that request.");
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const isForm = init?.body instanceof FormData;
   const response = await fetch(path, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { ...(isForm ? {} : { "Content-Type": "application/json" }), ...init?.headers },
   });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    const detail = typeof body?.detail === "string" ? body.detail : "The server could not complete that request.";
-    throw new ApiError(response.status, detail);
-  }
+  if (!response.ok) throw errorFrom(response.status, await response.json().catch(() => null));
   return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+export interface Paged<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pages: number;
+  page_size: number;
 }
 
 export type Source = "pack" | "generated" | "simulated";
