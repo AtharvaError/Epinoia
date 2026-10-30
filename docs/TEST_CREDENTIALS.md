@@ -68,6 +68,19 @@ Without a key, the assistant runs in offline mode and answers set questions from
 festival data. To enable free-form questions, set `ANTHROPIC_API_KEY` in `.env` and
 restart the backend. The key stays on the server.
 
+## Telegram bot
+
+Optional two-way bot that answers from live data over the same read-only assistant.
+It long-polls Telegram (no public URL needed), so it starts with the backend.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. In `.env` set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_AS_EMAIL` (the FestOS account whose
+   permissions the bot answers with, e.g. `safety@festos.test`), and, to restrict who
+   may use it, `TELEGRAM_ALLOWED_CHAT_IDS` (comma-separated chat ids; empty = anyone).
+3. Restart the backend and message the bot: `/help`, `/status`, `/incidents`, or any
+   question. Replies carry that user's permissions and cannot change anything; it never
+   logs the question, only that one was asked.
+
 ## Logins
 
 All accounts share the password in `DEMO_PASSWORD` in your `.env`.
