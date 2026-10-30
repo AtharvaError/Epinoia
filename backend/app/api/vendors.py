@@ -1,7 +1,7 @@
 import csv
 import io
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -150,6 +150,91 @@ def certificate_info(v: Vendor, festival: Festival) -> dict[str, Any]:
         "verified_at": v.certificate_verified_at.isoformat() if v.certificate_verified_at else None,
         "verification_note": v.certificate_verification_note,
     }
+
+
+def day_label(iso: str) -> str:
+    return date.fromisoformat(iso).strftime("%d %b").lstrip("0")
+
+
+def festival_days(festival: Festival) -> list[date]:
+    return [festival.start_date + timedelta(days=i) for i in range((festival.end_date - festival.start_date).days + 1)]
+
+
+def day_state(vendor: dict[str, Any], day: date) -> str:
+    """clear, boundary or none. An expiry on the day itself needs a person to check it."""
+    expiry = vendor["certificate"]["expiry"]
+    if not expiry or vendor["operational_status"] == "interrupted":
+        return "none"
+    until = date.fromisoformat(expiry)
+    if until > day:
+        return "clear"
+    if until == day:
+        return "clear" if vendor["certificate"]["verified_by"] else "boundary"
+    return "none"
+
+
+def serves_diet(vendor: dict[str, Any], key: str) -> bool:
+    """A menu label never proves allergen safety, so nut-free needs both verified flags."""
+    if key == "nut-free":
+        return vendor["nut_free_verified"] and vendor["allergen_controls_verified"]
+    return key in [x.lower() for x in vendor["effective_dietary_options"]]
+
+
+def coverage_by_day(vendors: list[dict[str, Any]], key: str, days: list[date]) -> list[dict[str, Any]]:
+    rows = []
+    for day in days:
+        serving = [v for v in vendors if serves_diet(v, key)]
+        clear = [v["code"] for v in serving if day_state(v, day) == "clear"]
+        boundary = [v["code"] for v in serving if day_state(v, day) == "boundary"]
+        rows.append({"day": day.isoformat(), "state": "covered" if clear else "boundary" if boundary else "gap", "clear": clear, "boundary": boundary})
+    return rows
+
+
+def service_grid(vendors: list[dict[str, Any]], days: list[date]) -> list[dict[str, Any]]:
+    """Which vendors can serve each meal on each day, by hours and certificate."""
+    grid = []
+    for day in days:
+        windows = []
+        for w in MEAL_WINDOWS:
+            open_now = [v for v in vendors if w["key"] in v["meal_windows"]]
+            windows.append({"key": w["key"], "clear": [v["code"] for v in open_now if day_state(v, day) == "clear"], "boundary": [v["code"] for v in open_now if day_state(v, day) == "boundary"]})
+        grid.append({"day": day.isoformat(), "windows": windows})
+    return grid
+
+
+def fix_first(vendors: list[dict[str, Any]], matrix: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The checks that close the most dietary gaps, biggest first. Disappears as each is done."""
+    items: list[dict[str, Any]] = []
+    for row in matrix:
+        people = row["participant_count"]
+        short_days = [d for d in row["days"] if d["state"] != "covered"]
+        if not people or not short_days:
+            continue
+        key, label = row["key"], row["label"]
+        if key == "nut-free":
+            kitchens = [v["code"] for v in vendors if v["certificate"]["status"] == "valid_beyond_festival" and v["operational_status"] != "interrupted"]
+            items.append({"id": "verify-nut-free", "severity": "critical", "action": "Verify allergen controls at one kitchen", "why": f"{people:,} people have a nut allergy and no vendor is verified as nut-free. These kitchens have valid certificates.", "people": people, "vendors": kitchens, "effort": 1})
+            continue
+        before = len(items)
+        for v in vendors:
+            if v["operational_status"] == "interrupted":
+                continue
+            lists_it = key in [x.lower() for x in v["effective_dietary_options"]]
+            menu_says = key.replace("-", " ") in (v["menu"] or "").lower().replace("-", " ")
+            clear_all_days = all(day_state(v, d) == "clear" for d in map(date.fromisoformat, (x["day"] for x in row["days"])))
+            if not lists_it and menu_says and clear_all_days:
+                items.append({"id": f"confirm-{key}-{v['code']}", "severity": "high", "action": f"Confirm {v['code']} can serve {label}", "why": f"Its menu says {v['menu']} and its certificate is valid, but {label} is not a listed option.", "people": people, "vendors": [v["code"]], "effort": 0})
+            elif lists_it and v["certificate"]["status"] == "expired":
+                items.append({"id": f"renew-{key}-{v['code']}", "severity": "critical", "action": f"Get {v['code']}'s certificate renewed", "why": f"It lists {label}, but its certificate expired on {day_label(v['certificate']['expiry'])}.", "people": people, "vendors": [v["code"]], "effort": 1})
+            elif lists_it and v["certificate"]["status"] == "expires_during_festival" and not clear_all_days:
+                lost = " and ".join(day_label(d["day"]) for d in short_days)
+                items.append({"id": f"extend-{key}-{v['code']}", "severity": "high", "action": f"Get {v['code']}'s certificate extended", "why": f"It is the only {label} vendor and its certificate ends on {day_label(v['certificate']['expiry'])}, so {lost} need cover.", "people": people, "vendors": [v["code"]], "effort": 1})
+        if len(items) == before:
+            items.append({"id": f"find-{key}", "severity": "critical", "action": f"Find a new {label} option", "why": f"{people:,} people need it and no available vendor can cover it. Nothing on file can fix this, so someone has to source it.", "people": people, "vendors": row["listed_codes"], "effort": 2})
+    unverified = [v["code"] for v in vendors if not v["capacity_unit"]]
+    if unverified:
+        items.append({"id": "capacity-units", "severity": "medium", "action": "Ask vendors what their capacity number counts", "why": "Comparing vendors stays off until each unit is confirmed.", "people": None, "vendors": unverified, "effort": 2})
+    return sorted(items, key=lambda i: (-(i["people"] or 0), i["effort"], i["id"]))
 
 
 def detect_vendor_inconsistencies(v: Vendor) -> list[dict[str, str]]:
@@ -309,6 +394,7 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
 
     coverage_matrix: list[dict[str, Any]] = []
     dietary_gaps_count = 0
+    days = festival_days(festival)
 
     for cat in dietary_categories:
         dkey = cat["key"]
@@ -373,6 +459,12 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
                 f"whose certificate expires during the festival on {v0['certificate']['expiry']}."
             )
             dietary_gaps_count += 1
+        elif not valid_beyond and not expiring_during and not independently_verified:
+            status = "no_active_vendor"
+            status_label = "No active vendor"
+            tone = "bad"
+            note = f"Every vendor listing {cat['label']} is unavailable, so {p_count:,} participants have no compliant cover."
+            dietary_gaps_count += 1
         else:
             status = "covered"
             status_label = f"{len(valid_beyond)} valid beyond fest" + (f" (+{len(expiring_during)} expiring Oct 31)" if expiring_during else "")
@@ -383,6 +475,7 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
             )
 
         coverage_matrix.append({
+            "days": coverage_by_day(serialized, dkey, days),
             "key": dkey,
             "label": cat["label"],
             "participant_need_label": cat["participant_key"],
@@ -435,7 +528,7 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
             "title": "Jain and vegan options are listed only by vendors with expired certificates",
             "detail": (
                 f"Jain ({', '.join(jain_row['listed_codes']) if jain_row else 'none'}, {jain_row['participant_count'] if jain_row else 0} participants) "
-                f"and Vegan ({', '.join(vegan_row['listed_codes']) if vegan_row else 'none'}) are listed only by vendors whose hygiene certificates expired on 2026-09-29. "
+                f"and Vegan ({', '.join(vegan_row['listed_codes']) if vegan_row else 'none'}) are listed only by vendors whose hygiene certificates have expired. "
                 "An expired vendor is non-compliant even if its menu lists the required dietary category."
             ),
             "affected_vendors": affected_codes,
@@ -447,7 +540,7 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
         alerts.append({
             "id": "expired-certificates",
             "severity": "critical",
-            "title": f"{len(expired_vendors)} vendor hygiene certificates expired before the festival (2026-09-29)",
+            "title": f"{len(expired_vendors)} vendor hygiene certificates expired before the festival",
             "detail": (
                 f"Vendors {', '.join(v['code'] for v in expired_vendors)} have hygiene certificates that expired on "
                 f"{', '.join(sorted({v['certificate']['expiry'] or '' for v in expired_vendors}))} (before festival start {festival.start_date.isoformat()})."
@@ -463,9 +556,9 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
         alerts.append({
             "id": "gluten-free-single-expiring",
             "severity": "high",
-            "title": f"Gluten-free support ({gf_row['participant_count']:,} participants) depends on one vendor ({gf_code}) whose certificate expires during the festival",
+            "title": f"Gluten-free ({gf_row['participant_count']:,} people) depends on {gf_code}, and has no compliant vendor once its certificate ends",
             "detail": (
-                f"Only {gf_code} lists gluten-free options, and its hygiene certificate expires on 2026-10-31 during the festival (30 Oct–1 Nov 2026). "
+                f"Only {gf_code} lists gluten-free options, and its hygiene certificate expires on {next(v['certificate']['expiry'] for v in serialized if v['code'] == gf_code)}, during the festival. "
                 f"Any service interruption or unrenewed certificate on {gf_code} leaves all {gf_row['participant_count']:,} gluten-free participants without a compliant vendor."
             ),
             "affected_vendors": [gf_code],
@@ -473,14 +566,38 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
             "category": "single_point_of_failure",
         })
 
+    for row in coverage_matrix:
+        if row["status"] == "no_active_vendor" and row["participant_count"]:
+            alerts.append({
+                "id": f"no-active-vendor-{row['key']}",
+                "severity": "critical",
+                "title": f"{row['label']} has no active vendor ({row['participant_count']:,} people)",
+                "detail": row["note"],
+                "affected_vendors": row["listed_codes"],
+                "participant_impact": row["participant_count"],
+                "category": "coverage_gap",
+            })
+        gone = [d["day"] for d in row["days"] if d["state"] == "gap"]
+        if row["participant_count"] and gone and len(gone) < len(row["days"]) and row["key"] != "gluten-free":
+            alerts.append({
+                "id": f"coverage-ends-{row['key']}",
+                "severity": "critical",
+                "title": f"{row['label']} has no compliant vendor on {' and '.join(day_label(d) for d in gone)}",
+                "detail": f"{row['participant_count']:,} people declare this need. Cover exists earlier in the festival but ends when the only vendor's certificate does.",
+                "affected_vendors": sorted({c for d in row["days"] for c in d["clear"] + d["boundary"]}),
+                "participant_impact": row["participant_count"],
+                "category": "coverage_by_day",
+            })
+
     if expiring_vendors:
+        expiry_dates = ", ".join(sorted({day_label(v["certificate"]["expiry"]) for v in expiring_vendors}))
         alerts.append({
             "id": "expiring-during-festival",
             "severity": "high",
-            "title": f"{len(expiring_vendors)} certificates expire on 31 October 2026 during the festival",
+            "title": f"{len(expiring_vendors)} certificates expire during the festival ({expiry_dates})",
             "detail": (
-                f"Vendors {', '.join(v['code'] for v in expiring_vendors)} have certificates expiring on 2026-10-31. "
-                "Do not treat an expiry date of 31 October as automatically valid for every service throughout 31 Oct and 1 Nov; verify certificate boundary coverage."
+                f"Vendors {', '.join(v['code'] for v in expiring_vendors)} have certificates expiring on {expiry_dates}. "
+                "An expiry date is not automatically valid for every service that day, or for any day after it. Verify each one."
             ),
             "affected_vendors": [v["code"] for v in expiring_vendors],
             "participant_impact": None,
@@ -572,7 +689,9 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
             "interrupted_count": sum(1 for v in serialized if v["operational_status"] == "interrupted"),
         },
         "alerts": alerts,
+        "fix_first": fix_first(serialized, coverage_matrix),
         "dietary_intelligence": {
+            "service_days": [d.isoformat() for d in days],
             "total_participants": total_participants,
             "blank_dietary_participants": blank_dietary_count,
             "participant_counts": participant_counts,
@@ -598,11 +717,12 @@ def build_intelligence(db: Session, festival: Festival) -> dict[str, Any]:
                 for h, codes in sorted(hours_groups.items())
             ],
             "meal_windows": meal_window_summary,
+            "service_grid": service_grid(serialized, days),
         },
         "procurement_scope_note": {
             "scope": "food_vendors_only",
             "message": (
-                "These 14 records are food vendors from vendors.csv with payment terms only. "
+                f"These {len(serialized)} records are food vendors with payment terms only. "
                 "Merchandise T-shirt sizes, stock, and shortages are managed in Venues & Resources (Inventory), and verified financial records are managed in Finance."
             ),
         },
@@ -1223,7 +1343,7 @@ def simulate_vendor_interruption(
                 "participant_count": p_affected,
                 "severity": "high",
                 "explanation": (
-                    f"'{d}' ({p_affected:,} participants) is only offered by candidate vendor(s) whose certificate expires on 2026-10-31."
+                    f"'{d}' ({p_affected:,} participants) is only offered by candidate vendors whose certificate expires during the festival."
                 ),
             })
 

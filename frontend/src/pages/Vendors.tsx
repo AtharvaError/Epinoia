@@ -1,17 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Archive, FileSpreadsheet, Plus,
-  ShieldAlert, ShieldCheck, Store, Wrench,
-} from "lucide-react";
+import { Archive, FileSpreadsheet, Plus, ShieldAlert, ShieldCheck, Wrench } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
-  type Column, DataTable, Dialog, ErrorNote, Facts, Field, Moment,
-  notify, Pill, QueryState, SectionHead, Tabs, useAction, useDebounced, useFest,
+  type Column, DataTable, Dialog, ErrorNote, Facts, Field,
+  notify, PageHead, Pill, QueryState, Tabs, useAction, useDebounced, useFest,
 } from "../components/ui";
 import { api } from "../lib/api";
-import { formatTime } from "../lib/format";
+import { formatNumber, formatTime } from "../lib/format";
 
 interface CertificateInfo {
   status: "expired" | "expires_during_festival" | "valid_beyond_festival" | "missing";
@@ -70,7 +67,12 @@ interface VendorRecord {
   attention_reasons: string[];
 }
 
+interface CoverageDay { day: string; state: "covered" | "boundary" | "gap"; clear: string[]; boundary: string[] }
+
+interface FixFirstItem { id: string; severity: string; action: string; why: string; people: number | null; vendors: string[] }
+
 interface DietaryMatrixRow {
+  days: CoverageDay[];
   key: string;
   label: string;
   participant_need_label: string;
@@ -188,7 +190,9 @@ interface VendorsIntelligence {
     interrupted_count: number;
   };
   alerts: IntelligenceAlert[];
+  fix_first: FixFirstItem[];
   dietary_intelligence: {
+    service_days: string[];
     total_participants: number;
     blank_dietary_participants: number;
     participant_counts: Record<string, number>;
@@ -209,6 +213,7 @@ interface VendorsIntelligence {
     numerical_allocation_enabled: boolean;
     hours_distribution: { hours: string; count: number; vendor_codes: string[] }[];
     meal_windows: MealWindowSummary[];
+    service_grid: { day: string; windows: { key: string; clear: string[]; boundary: string[] }[] }[];
   };
   procurement_scope_note: {
     scope: string;
@@ -247,14 +252,85 @@ function operationalLabel(status: VendorRecord["operational_status"]): string {
   return "Unconfirmed (CSV import)";
 }
 
+const CERTIFICATE_SHORT: Record<CertificateInfo["status"], string> = {
+  expired: "Expired", expires_during_festival: "Expires during fest", valid_beyond_festival: "Valid", missing: "Missing",
+};
+const DAY_STATE: Record<CoverageDay["state"], { label: string; className: string }> = {
+  covered: { label: "Covered", className: "day-ok" }, boundary: { label: "Check expiry", className: "day-warn" }, gap: { label: "No vendor", className: "day-bad" },
+};
+const TIMELINE = { start: 7, hours: 16 };
+
+function shortDate(iso: string) {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+function openHours(hours: string | null) {
+  const match = hours?.match(/^(\d{1,2}):\d{2}-(\d{1,2}):\d{2}$/);
+  return match ? { start: Number(match[1]), end: Number(match[2]) } : null;
+}
+
+const directoryColumns: Column<VendorRecord>[] = [
+  { label: "ID", value: (v) => v.code, cell: (v) => <span className="mono">{v.code}</span> },
+  {
+    label: "Vendor", value: (v) => v.name,
+    cell: (v) => <><strong>{v.name}</strong><small className="cell-note">{v.operational_status === "unconfirmed" ? "Unconfirmed" : operationalLabel(v.operational_status)}{v.source === "pack" ? "" : " · Added by hand"}</small></>,
+  },
+  {
+    label: "Menu", value: (v) => v.menu ?? "",
+    cell: (v) => <>{v.menu ?? <span className="unknown">Not stated</span>}{v.inconsistencies.length > 0 && <small className="cell-note warn-text">Label mismatch</small>}</>,
+  },
+  {
+    label: "Diets", cell: (v) => (
+      <>
+        {v.dietary_options.join(", ") || <span className="unknown">None listed</span>}
+        {v.verified_dietary_options && <small className="cell-note ok-text">Verified: {v.verified_dietary_options.join(", ") || "none"}</small>}
+        {v.nut_free_verified && v.allergen_controls_verified && <small className="cell-note ok-text">Nut-free verified</small>}
+      </>
+    ),
+  },
+  {
+    label: "Certificate", className: "nowrap", value: (v) => v.certificate.status,
+    cell: (v) => <><Pill value={CERTIFICATE_SHORT[v.certificate.status]} tone={v.certificate.tone} />{v.certificate.verified_by && <small className="cell-note">Checked by {v.certificate.verified_by}</small>}</>,
+  },
+  { label: "Expires", className: "nowrap", value: (v) => v.hygiene_certificate_expiry ?? "", cell: (v) => (v.hygiene_certificate_expiry ? shortDate(v.hygiene_certificate_expiry) : <span className="unknown">Missing</span>) },
+  { label: "Hours", className: "nowrap", value: (v) => v.hours ?? "", cell: (v) => <>{v.hours ?? <span className="unknown">Unknown</span>}<small className="cell-note">{v.meal_windows.length} of 5 meals</small></> },
+  { label: "Capacity", className: "num", value: (v) => v.capacity ?? 0, cell: (v) => (v.capacity === null ? <span className="unknown">Unknown</span> : formatNumber(v.capacity)) },
+  { label: "Unit", className: "nowrap", value: (v) => v.capacity_unit ?? "", cell: (v) => (v.capacity_unit ? <span className="ok-text">{v.capacity_unit}</span> : <span className="warn-text">Not verified</span>) },
+  { label: "Payment", value: (v) => v.payment_terms ?? "", cell: (v) => v.payment_terms ?? <span className="unknown">Not stated</span> },
+];
+
+function HoursTimeline({ vendors, windows, onOpen }: { vendors: VendorRecord[]; windows: MealWindowSummary[]; onOpen: (code: string) => void }) {
+  const place = (start: number, end: number) => ({ left: `${((start - TIMELINE.start) * 100) / TIMELINE.hours}%`, width: `${((end - start) * 100) / TIMELINE.hours}%` });
+  return (
+    <div className="hours-chart">
+      <div className="hours-row hours-axis">
+        <span>Vendor</span>
+        <div className="hours-track">{windows.map((w) => <i key={w.key} style={place(w.start, w.end)} title={w.window}>{w.label}</i>)}</div>
+      </div>
+      {vendors.map((v) => {
+        const open = openHours(v.hours);
+        return (
+          <button key={v.code} className="hours-row" onClick={() => onOpen(v.code)}>
+            <span><strong>{v.code}</strong> {v.name}</span>
+            <div className="hours-track">
+              {windows.map((w) => <i key={w.key} className="hours-band" style={place(w.start, w.end)} aria-hidden="true" />)}
+              {open ? <b className={`hours-bar cert-${v.certificate.status}`} style={place(open.start, open.end)}>{v.hours} · {CERTIFICATE_SHORT[v.certificate.status]}</b> : <b className="hours-unknown">Hours not stated</b>}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Vendors() {
   const { base, can } = useFest();
   const queryClient = useQueryClient();
 
   const [sectionTab, setSectionTab] = useState<"directory" | "compliance" | "hours" | "interruption">("directory");
-  const [filterBy, setFilterBy] = useState<string>("all");
-  const [dietaryFilter, setDietaryFilter] = useState<string>("");
-  const [hoursFilter, setHoursFilter] = useState<string>("");
+  const [filterBy, setFilterBy] = useState("all");
+  const [dietaryFilter, setDietaryFilter] = useState("");
+  const [hoursFilter, setHoursFilter] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounced(search, 200);
@@ -262,52 +338,44 @@ export function Vendors() {
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [creatingVendor, setCreatingVendor] = useState(false);
   const [importingCsv, setImportingCsv] = useState(false);
-  const [simulatingVendorCode, setSimulatingVendorCode] = useState<string>("VND02");
-  const [simulationReason, setSimulationReason] = useState<string>("");
+  const [simulatingVendorCode, setSimulatingVendorCode] = useState("");
+  const [simulationReason, setSimulationReason] = useState("");
   const [activeInterruption, setActiveInterruption] = useState<InterruptionRecord | null>(null);
 
   const intelligence = useQuery({
     queryKey: ["vendors-intelligence", base],
     queryFn: () => api<VendorsIntelligence>(`${base}/vendors/intelligence`),
   });
-
-  const directoryQuery = useQuery({
-    queryKey: ["vendors-list", base, includeArchived],
-    queryFn: () => api<{ items: VendorRecord[]; total: number }>(`${base}/vendors?include_archived=${includeArchived}`),
+  // The summary already carries every live vendor, so only archived records need a second request.
+  const archived = useQuery({
+    queryKey: ["vendors-list", base],
+    queryFn: () => api<{ items: VendorRecord[]; total: number }>(`${base}/vendors?include_archived=true`),
+    enabled: includeArchived,
   });
+  const directory = useMemo(() => (includeArchived ? archived.data?.items : intelligence.data?.vendors) ?? [], [includeArchived, archived.data, intelligence.data]);
 
-  const filteredVendors = useMemo(() => {
-    const items = directoryQuery.data?.items ?? intelligence.data?.vendors ?? [];
-    return items.filter((v) => {
-      if (filterBy === "valid" && v.certificate.status !== "valid_beyond_festival") return false;
-      if (filterBy === "expired" && v.certificate.status !== "expired") return false;
-      if (filterBy === "expiring" && v.certificate.status !== "expires_during_festival") return false;
-      if (filterBy === "attention" && !v.requires_attention) return false;
-      if (dietaryFilter) {
-        const d = dietaryFilter.toLowerCase();
-        const hasTag = v.effective_dietary_options.some((t) => t.toLowerCase() === d) || (d === "nut-free" && v.nut_free_verified);
-        if (!hasTag) return false;
-      }
-      if (hoursFilter && v.hours !== hoursFilter) return false;
-      if (debouncedSearch) {
-        const q = debouncedSearch.toLowerCase();
-        const match =
-          v.code.toLowerCase().includes(q) ||
-          v.name.toLowerCase().includes(q) ||
-          (v.menu ?? "").toLowerCase().includes(q) ||
-          (v.payment_terms ?? "").toLowerCase().includes(q) ||
-          v.effective_dietary_options.some((t) => t.toLowerCase().includes(q));
-        if (!match) return false;
-      }
-      return true;
-    });
-  }, [directoryQuery.data, intelligence.data, filterBy, dietaryFilter, hoursFilter, debouncedSearch]);
+  const filteredVendors = useMemo(() => directory.filter((v) => {
+    if (filterBy === "valid" && v.certificate.status !== "valid_beyond_festival") return false;
+    if (filterBy === "expired" && v.certificate.status !== "expired") return false;
+    if (filterBy === "expiring" && v.certificate.status !== "expires_during_festival") return false;
+    if (filterBy === "attention" && !v.requires_attention) return false;
+    if (dietaryFilter) {
+      const hasTag = v.effective_dietary_options.some((t) => t.toLowerCase() === dietaryFilter) || (dietaryFilter === "nut-free" && v.nut_free_verified);
+      if (!hasTag) return false;
+    }
+    if (hoursFilter && v.hours !== hoursFilter) return false;
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
+      return [v.code, v.name, v.menu ?? "", v.payment_terms ?? "", ...v.effective_dietary_options].some((text) => text.toLowerCase().includes(q));
+    }
+    return true;
+  }), [directory, filterBy, dietaryFilter, hoursFilter, debouncedSearch]);
 
   const simulateAction = useAction(
-    () =>
-      api<InterruptionRecord>(`${base}/vendors/${simulatingVendorCode}/interruptions/simulate`, {
+    (code: string) =>
+      api<InterruptionRecord>(`${base}/vendors/${code}/interruptions/simulate`, {
         method: "POST",
-        body: JSON.stringify({ reason: simulationReason.trim() || `Operational interruption check for ${simulatingVendorCode}` }),
+        body: JSON.stringify({ reason: simulationReason.trim() || `Operational interruption check for ${code}` }),
       }),
     {
       success: (res) => `Interruption simulated for ${res.vendor_code}`,
@@ -318,730 +386,243 @@ export function Vendors() {
     }
   );
 
-  const columns: Column<VendorRecord>[] = [
-    {
-      label: "Vendor ID",
-      value: (v) => v.code,
-      cell: (v) => (
-        <div>
-          <strong>{v.code}</strong>
-          <div>
-            <small className="muted">{v.source === "pack" ? "vendors.csv" : "Manual"}</small>
-          </div>
-        </div>
-      ),
-    },
-    {
-      label: "Vendor Name",
-      value: (v) => v.name,
-      cell: (v) => (
-        <div>
-          <strong>{v.name}</strong>
-          <div style={{ marginTop: 4 }}>
-            <Pill value={operationalLabel(v.operational_status)} tone={operationalTone(v.operational_status)} />
-          </div>
-        </div>
-      ),
-    },
-    {
-      label: "Menu",
-      value: (v) => v.menu ?? "",
-      cell: (v) => (
-        <div>
-          <span>{v.menu ?? <span className="unknown">Unspecified</span>}</span>
-          {v.inconsistencies.length > 0 && (
-            <div style={{ marginTop: 4 }}>
-              <Pill value={`${v.inconsistencies.length} label mismatch`} tone="warn" />
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      label: "Dietary Options",
-      cell: (v) => (
-        <div className="chips">
-          {v.dietary_options.map((tag) => (
-            <Pill key={tag} value={tag} tone="info" />
-          ))}
-          {v.verified_dietary_options && (
-            <Pill value={`Verified: ${v.verified_dietary_options.join(", ")}`} tone="ok" />
-          )}
-          {v.nut_free_verified && v.allergen_controls_verified && (
-            <Pill value="Nut-free verified" tone="ok" />
-          )}
-        </div>
-      ),
-    },
-    {
-      label: "Hygiene Certificate Status",
-      value: (v) => v.certificate.status,
-      cell: (v) => (
-        <div>
-          <Pill value={v.certificate.label} tone={v.certificate.tone} />
-          {v.certificate.verified_by && (
-            <div>
-              <small className="muted">Verified by {v.certificate.verified_by}</small>
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      label: "Certificate Expiry",
-      value: (v) => v.hygiene_certificate_expiry ?? "",
-      cell: (v) => (
-        <div>
-          <strong>{v.hygiene_certificate_expiry ?? "Missing"}</strong>
-          {v.certificate.boundary_flag && (
-            <div>
-              <small className="tone-warn">Boundary: verify Oct 31–Nov 1</small>
-            </div>
-          )}
-        </div>
-      ),
-    },
-    {
-      label: "Operating Hours",
-      value: (v) => v.hours ?? "",
-      cell: (v) => (
-        <div>
-          <strong>{v.hours ?? "Unknown"}</strong>
-          <div>
-            <small className="muted">
-              {v.hours === "07:00-23:00" ? "All 4 meal windows" : v.hours === "10:00-16:00" ? "Mid-day / Lunch only" : "Custom"}
-            </small>
-          </div>
-        </div>
-      ),
-    },
-    {
-      label: "Listed Capacity",
-      className: "num",
-      value: (v) => v.capacity ?? 0,
-      cell: (v) => <strong>{v.capacity !== null ? v.capacity.toLocaleString("en-IN") : "—"}</strong>,
-    },
-    {
-      label: "Capacity Unit Verification",
-      value: (v) => v.capacity_unit ?? "",
-      cell: (v) =>
-        v.capacity_unit ? (
-          <div>
-            <Pill value={v.capacity_unit} tone="ok" />
-            <div>
-              <small className="muted">by {v.capacity_verified_by}</small>
-            </div>
-          </div>
-        ) : (
-          <Pill value="Capacity unit not verified." tone="warn" />
-        ),
-    },
-    {
-      label: "Payment Terms",
-      value: (v) => v.payment_terms ?? "",
-      cell: (v) => <span>{v.payment_terms ?? <span className="unknown">Not specified</span>}</span>,
-    },
-  ];
-
   return (
-    <QueryState query={intelligence}>
-      {intelligence.data && (() => {
-        const data = intelligence.data;
-        const ov = data.overview;
-        const hc = data.hours_and_capacity;
-        const di = data.dietary_intelligence;
+    <div className="vendors-page">
+      <PageHead title="Vendors" subtitle="Food service for the festival, using only what vendors.csv and manual checks can prove">
+        {can("vendors.write") && (
+          <>
+            <button className="button-ghost" onClick={() => setImportingCsv(true)}><FileSpreadsheet size={16} /> Import CSV</button>
+            <button className="button-ghost" onClick={() => setCreatingVendor(true)}><Plus size={16} /> Add vendor</button>
+            <button className="button-primary small" onClick={() => setSectionTab("interruption")}><ShieldAlert size={16} /> Report Vendor Unavailable</button>
+          </>
+        )}
+      </PageHead>
 
-        return (
-          <div className="stack">
-            <Moment
-              eyebrow={
-                <>
-                  <Store size={15} /> Food Vendor Operations & Dietary Intelligence · Festival Period {data.festival.start_date} to {data.festival.end_date}
-                </>
-              }
-              title={`${ov.total_vendors} food vendors — ${ov.certificates_expired} expired certificates — ${ov.certificates_expiring_oct31} expire Oct 31 — ${di.participant_counts["nut allergy"] ?? 0} nut allergies with 0 declared nut-free vendors.`}
-            >
-              <div className="toolbar">
-                <button
-                  className="button-primary"
-                  onClick={() => {
-                    setSectionTab("interruption");
-                  }}
-                >
-                  <ShieldAlert size={16} /> Report Vendor Unavailable
-                </button>
-                {can("vendors.write") && (
-                  <>
-                    <button className="button-secondary" onClick={() => setCreatingVendor(true)}>
-                      <Plus size={16} /> Create Vendor
-                    </button>
-                    <button className="button-ghost" onClick={() => setImportingCsv(true)}>
-                      <FileSpreadsheet size={16} /> Import CSV
-                    </button>
-                  </>
-                )}
-              </div>
-            </Moment>
+      <QueryState query={intelligence}>
+        {intelligence.data && (() => {
+          const data = intelligence.data;
+          const ov = data.overview;
+          const hc = data.hours_and_capacity;
+          const di = data.dietary_intelligence;
+          const days = di.service_days;
+          const gaps = di.coverage_matrix.filter((r) => r.tone !== "ok");
+          const hourOptions = [...new Set(data.vendors.map((v) => v.hours).filter(Boolean))] as string[];
+          const nut = di.coverage_matrix.find((r) => r.key === "nut-free");
+          const target = simulatingVendorCode || data.vendors[0]?.code;
+          const current = activeInterruption ?? data.interruptions[0];
+          const showDirectory = (filter: string) => {
+            setSectionTab("directory");
+            setFilterBy(filter);
+          };
+          const counts: Record<string, number> = {
+            all: directory.length, valid: directory.filter((v) => v.certificate.status === "valid_beyond_festival").length, expired: directory.filter((v) => v.certificate.status === "expired").length,
+            expiring: directory.filter((v) => v.certificate.status === "expires_during_festival").length, attention: directory.filter((v) => v.requires_attention).length,
+          };
+          const tiles: { key: string; label: string; value: number; note: string; tone?: string; onClick: () => void; active: boolean }[] = [
+            { key: "all", label: "Food vendors", value: ov.total_vendors, note: `${ov.confirmed_active_count} confirmed active`, onClick: () => showDirectory("all"), active: sectionTab === "directory" && filterBy === "all" },
+            { key: "expired", label: "Certificates expired", value: ov.certificates_expired, note: ov.expired_vendor_codes.join(", ") || "None", tone: "bad", onClick: () => showDirectory("expired"), active: sectionTab === "directory" && filterBy === "expired" },
+            { key: "expiring", label: "Expiring during fest", value: ov.certificates_expiring_oct31, note: ov.expiring_vendor_codes.join(", ") || "None", tone: "warn", onClick: () => showDirectory("expiring"), active: sectionTab === "directory" && filterBy === "expiring" },
+            { key: "valid", label: "Valid beyond fest", value: ov.certificates_valid_beyond, note: ov.valid_beyond_vendor_codes.join(", ") || "None", tone: "ok", onClick: () => showDirectory("valid"), active: sectionTab === "directory" && filterBy === "valid" },
+            { key: "gaps", label: "Dietary gaps", value: ov.dietary_coverage_gaps, note: gaps.map((g) => g.label.split(" /")[0]).join(", ") || "None", tone: "bad", onClick: () => setSectionTab("compliance"), active: sectionTab === "compliance" },
+            { key: "attention", label: "Need verification", value: ov.vendors_requiring_verification, note: "Capacity, status or labels", tone: "warn", onClick: () => showDirectory("attention"), active: sectionTab === "directory" && filterBy === "attention" },
+          ];
 
-            {/* SECTION A: VENDOR OVERVIEW KPI CARDS */}
-            <section aria-label="Vendor Overview">
-              <div className="ribbon">
-                <button
-                  type="button"
-                  className={`stat stat-button ${filterBy === "all" && sectionTab === "directory" ? "stat-active" : ""}`}
-                  onClick={() => {
-                    setSectionTab("directory");
-                    setFilterBy("all");
-                  }}
-                >
-                  <span>Total food vendors</span>
-                  <strong>{ov.total_vendors}</strong>
-                  <small>{ov.confirmed_active_count} confirmed · {ov.unconfirmed_count} unconfirmed</small>
-                </button>
-
-                <button
-                  type="button"
-                  className={`stat stat-button tone-bad ${filterBy === "expired" && sectionTab === "directory" ? "stat-active" : ""}`}
-                  onClick={() => {
-                    setSectionTab("directory");
-                    setFilterBy("expired");
-                  }}
-                >
-                  <span>Certificates expired</span>
-                  <strong>{ov.certificates_expired}</strong>
-                  <small>{ov.expired_vendor_codes.join(", ") || "None"} (2026-09-29)</small>
-                </button>
-
-                <button
-                  type="button"
-                  className={`stat stat-button tone-warn ${filterBy === "expiring" && sectionTab === "directory" ? "stat-active" : ""}`}
-                  onClick={() => {
-                    setSectionTab("directory");
-                    setFilterBy("expiring");
-                  }}
-                >
-                  <span>Expiring 31 Oct 2026</span>
-                  <strong>{ov.certificates_expiring_oct31}</strong>
-                  <small>{ov.expiring_vendor_codes.join(", ") || "None"} (Boundary check)</small>
-                </button>
-
-                <button
-                  type="button"
-                  className={`stat stat-button tone-ok ${filterBy === "valid" && sectionTab === "directory" ? "stat-active" : ""}`}
-                  onClick={() => {
-                    setSectionTab("directory");
-                    setFilterBy("valid");
-                  }}
-                >
-                  <span>Valid beyond festival</span>
-                  <strong>{ov.certificates_valid_beyond}</strong>
-                  <small>{ov.valid_beyond_vendor_codes.join(", ")}</small>
-                </button>
-
-                <button
-                  type="button"
-                  className={`stat stat-button tone-bad ${sectionTab === "compliance" ? "stat-active" : ""}`}
-                  onClick={() => setSectionTab("compliance")}
-                >
-                  <span>Dietary coverage gaps</span>
-                  <strong>{ov.dietary_coverage_gaps}</strong>
-                  <small>Nut-free (0), Jain & Vegan (expired), GF (1)</small>
-                </button>
-
-                <button
-                  type="button"
-                  className={`stat stat-button tone-warn ${filterBy === "attention" && sectionTab === "directory" ? "stat-active" : ""}`}
-                  onClick={() => {
-                    setSectionTab("directory");
-                    setFilterBy("attention");
-                  }}
-                >
-                  <span>Requiring verification</span>
-                  <strong>{ov.vendors_requiring_verification}</strong>
-                  <small>Capacity unit, status, or labels</small>
-                </button>
-              </div>
-            </section>
-
-            {/* NAVIGATION TABS FOR SECTIONS B, C, D, E */}
-            <Tabs
-              value={sectionTab}
-              onChange={setSectionTab}
-              options={[
-                ["directory", `B. Vendor Directory (${filteredVendors.length})`],
-                ["compliance", `C. Compliance & Dietary Intelligence (${data.alerts.length} alerts)`],
-                ["hours", `D. Operating Hours & Capacity (${hc.total_listed_capacity.toLocaleString("en-IN")} listed)`],
-                ["interruption", `E. Vendor Interruption & Recovery (${data.interruptions.length})`],
-              ]}
-            />
-
-            {/* SECTION B: VENDOR DIRECTORY */}
-            {sectionTab === "directory" && (
-              <section className="panel stack" aria-label="Vendor Directory">
-                <SectionHead title="Food Vendor Directory">
-                  <span className="muted small">
-                    Click any vendor row to inspect original CSV fields, normalized dietary tags, certificate boundary status, and manually verified records.
-                  </span>
-                </SectionHead>
-
-                <div className="toolbar">
-                  <input
-                    type="search"
-                    placeholder="Search vendor ID, name, menu, dietary, payment terms..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    style={{ minWidth: 280 }}
-                  />
-
-                  <div className="tabs" role="group" aria-label="Certificate and attention filters">
-                    {([
-                      ["all", "All vendors"],
-                      ["valid", "Valid certificates"],
-                      ["expired", "Expired certificates"],
-                      ["expiring", "Expiring certificates"],
-                      ["attention", "Requires attention"],
-                    ] as const).map(([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        className={filterBy === key ? "active" : ""}
-                        onClick={() => setFilterBy(key)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <select
-                    aria-label="Dietary coverage filter"
-                    value={dietaryFilter}
-                    onChange={(e) => setDietaryFilter(e.target.value)}
-                  >
-                    <option value="">All dietary coverage</option>
-                    <option value="vegetarian">Vegetarian</option>
-                    <option value="non-vegetarian">Non-Vegetarian</option>
-                    <option value="halal">Halal</option>
-                    <option value="gluten-free">Gluten-Free</option>
-                    <option value="jain">Jain</option>
-                    <option value="vegan">Vegan</option>
-                    <option value="nut-free">Nut-Free</option>
-                  </select>
-
-                  <select
-                    aria-label="Operating hours filter"
-                    value={hoursFilter}
-                    onChange={(e) => setHoursFilter(e.target.value)}
-                  >
-                    <option value="">All operating hours</option>
-                    <option value="07:00-23:00">07:00-23:00 (Full day)</option>
-                    <option value="10:00-16:00">10:00-16:00 (Mid-day)</option>
-                  </select>
-
-                  <label className="check-inline">
-                    <input
-                      type="checkbox"
-                      checked={includeArchived}
-                      onChange={(e) => setIncludeArchived(e.target.checked)}
-                    />
-                    <span>Show archived</span>
-                  </label>
-                </div>
-
-                <DataTable
-                  rows={filteredVendors}
-                  columns={columns}
-                  rowKey={(v) => v.code}
-                  onRow={(v) => setSelectedCode(v.code)}
-                  empty="No vendors match the selected filters."
-                />
-
-                <div className="callout">
-                  <strong>Procurement & Data Provenance Scope:</strong> {data.procurement_scope_note.message}{" "}
-                  <Link to="/venues">Open Venues & Resources (Merchandise Inventory)</Link> ·{" "}
-                  <Link to="/finance">Open Finance (Verified Settlements)</Link>
-                </div>
+          return (
+            <>
+              <section className="vendor-tiles" aria-label="Vendor overview">
+                {tiles.map((t) => (
+                  <button key={t.key} type="button" className={`vendor-tile ${t.tone ? `tile-${t.tone}` : ""}`} aria-pressed={t.active} onClick={t.onClick}>
+                    <span>{t.label}</span><strong>{t.value}</strong><small>{t.note}</small>
+                  </button>
+                ))}
               </section>
-            )}
 
-            {/* SECTION C: COMPLIANCE & DIETARY INTELLIGENCE */}
-            {sectionTab === "compliance" && (
-              <div className="stack">
-                <div className="ops-grid">
-                  <section className="panel alerts-panel">
-                    <SectionHead title="Actionable Compliance & Allergen Alerts">
-                      <span className="muted small">Derived live from vendors.csv & participants.csv</span>
-                    </SectionHead>
-                    <div className="alert-list">
-                      {data.alerts.map((alert) => (
-                        <article key={alert.id} className={`alert-row severity-${alert.severity}`}>
-                          <span className="severity">{alert.severity}</span>
-                          <div className="alert-body">
-                            <strong>{alert.title}</strong>
-                            <p>{alert.detail}</p>
-                            <small>
-                              {alert.affected_vendors.length > 0
-                                ? `Vendors: ${alert.affected_vendors.join(", ")}`
-                                : "Affects festival-wide dietary safety"}
-                              {alert.participant_impact !== null ? ` · ${alert.participant_impact.toLocaleString("en-IN")} participants affected` : ""}
-                            </small>
-                          </div>
-                          {alert.affected_vendors.length > 0 && (
-                            <button
-                              className="button-secondary"
-                              onClick={() => setSelectedCode(alert.affected_vendors[0])}
-                            >
-                              Inspect {alert.affected_vendors[0]}
-                            </button>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-
-                  <aside className="panel stack">
-                    <SectionHead title="Allergen & Compliance Safeguards" />
-                    <div className="callout">
-                      <strong>Nut Allergy Protocol ({di.participant_counts["nut allergy"] ?? 0} participants)</strong>
-                      <p className="muted small" style={{ marginTop: 4 }}>
-                        0 of 14 vendors declare a <code>nut-free</code> option in <code>vendors.csv</code>. Never assume a meal is allergy-safe based on a menu label alone. Declared dietary options are tracked separately from verified kitchen allergen controls and cross-contamination prevention.
-                      </p>
-                    </div>
-                    <div className="callout">
-                      <strong>Certificate Boundary (30 Oct – 1 Nov 2026)</strong>
-                      <p className="muted small" style={{ marginTop: 4 }}>
-                        4 vendors (<code>VND01, VND02, VND04, VND07</code>) expire on <strong>2026-10-31</strong>. An expiry date of 31 October is not treated as automatically valid for every service throughout 31 Oct and 1 Nov without explicit boundary verification.
-                      </p>
-                    </div>
-                    <div className="callout">
-                      <strong>Unreported Participant Dietary Data</strong>
-                      <p className="muted small" style={{ marginTop: 4 }}>
-                        <strong>{di.blank_dietary_participants.toLocaleString("en-IN")}</strong> of {di.total_participants.toLocaleString("en-IN")} participants have blank dietary needs in <code>participants.csv</code> (flagged as <code>missing_dietary</code>).{" "}
-                        <Link to="/participants">Inspect in Participants</Link>
-                      </p>
-                    </div>
-                  </aside>
-                </div>
-
-                <section className="panel stack">
-                  <SectionHead title="Participant Dietary Demand vs. Vendor Coverage Matrix">
-                    <span className="muted small">
-                      Distinguishes participant declared need vs. vendor-listed options vs. valid hygiene certificates vs. independent organizer verification.
-                    </span>
-                  </SectionHead>
-                  <DataTable
-                    rows={di.coverage_matrix}
-                    rowKey={(r) => r.key}
-                    empty="No dietary categories found."
-                    columns={[
-                      {
-                        label: "Dietary / Allergen Requirement",
-                        cell: (r) => <strong>{r.label}</strong>,
-                      },
-                      {
-                        label: "Declared Participants",
-                        className: "num",
-                        value: (r) => r.participant_count,
-                        cell: (r) => (
-                          <strong>
-                            {r.participant_count > 0 ? r.participant_count.toLocaleString("en-IN") : "0 (Vendor-only tag)"}
-                          </strong>
-                        ),
-                      },
-                      {
-                        label: "Vendor-Listed (CSV)",
-                        cell: (r) =>
-                          r.listed_codes.length > 0 ? (
-                            <span>
-                              <strong>{r.listed_count}</strong> ({r.listed_codes.join(", ")})
-                            </span>
-                          ) : (
-                            <Pill value="0 listed" tone="bad" />
-                          ),
-                      },
-                      {
-                        label: "Valid Beyond Festival",
-                        cell: (r) =>
-                          r.valid_beyond_codes.length > 0 ? (
-                            <span>
-                              <strong>{r.valid_beyond_count}</strong> ({r.valid_beyond_codes.join(", ")})
-                            </span>
-                          ) : (
-                            <Pill value="0 valid beyond fest" tone="bad" />
-                          ),
-                      },
-                      {
-                        label: "Expiring 31 Oct",
-                        cell: (r) =>
-                          r.expiring_during_codes.length > 0 ? (
-                            <span>
-                              <strong>{r.expiring_during_count}</strong> ({r.expiring_during_codes.join(", ")})
-                            </span>
-                          ) : (
-                            <span className="muted">0</span>
-                          ),
-                      },
-                      {
-                        label: "Expired Certificate (Non-Compliant)",
-                        cell: (r) =>
-                          r.expired_codes.length > 0 ? (
-                            <Pill value={`${r.expired_count} expired (${r.expired_codes.join(", ")})`} tone="bad" />
-                          ) : (
-                            <span className="muted">0</span>
-                          ),
-                      },
-                      {
-                        label: "Independently Verified Safety",
-                        cell: (r) =>
-                          r.independently_verified_codes.length > 0 ? (
-                            <Pill value={`Verified (${r.independently_verified_codes.join(", ")})`} tone="ok" />
-                          ) : (
-                            <span className="muted">Not verified</span>
-                          ),
-                      },
-                      {
-                        label: "Coverage Assessment",
-                        cell: (r) => (
-                          <div>
-                            <Pill value={r.status_label} tone={r.tone} />
-                            <div style={{ marginTop: 4 }}>
-                              <small className="muted">{r.note}</small>
-                            </div>
-                          </div>
-                        ),
-                      },
-                    ]}
-                  />
-                </section>
-
-                <section className="panel stack">
-                  <SectionHead title="Menu vs. Dietary Label & Hours Inconsistencies">
-                    <span className="muted small">Flagged directly from vendors.csv records for organizer verification</span>
-                  </SectionHead>
-                  <DataTable
-                    rows={di.inconsistencies}
-                    rowKey={(inc) => `${inc.vendor_code}-${inc.key}`}
-                    onRow={(inc) => setSelectedCode(inc.vendor_code)}
-                    empty="No menu inconsistencies detected."
-                    columns={[
-                      { label: "Vendor", cell: (inc) => <strong>{inc.vendor_code} · {inc.vendor_name}</strong> },
-                      { label: "Listed Menu", cell: (inc) => <span>{inc.menu}</span> },
-                      { label: "CSV Dietary Options", cell: (inc) => <span>{inc.dietary_options.join("; ")}</span> },
-                      { label: "Operating Hours", cell: (inc) => <span>{inc.hours}</span> },
-                      { label: "Inconsistency Explanation", cell: (inc) => <span>{inc.detail}</span> },
-                      {
-                        label: "Status",
-                        cell: (inc) => (
-                          <Pill
-                            value={inc.resolved === "true" ? "Verified by organizer" : "Requires verification"}
-                            tone={inc.resolved === "true" ? "ok" : "warn"}
-                          />
-                        ),
-                      },
-                    ]}
-                  />
-                </section>
-              </div>
-            )}
-
-            {/* SECTION D: OPERATING HOURS & CAPACITY */}
-            {sectionTab === "hours" && (
-              <div className="stack">
-                <div className="ops-grid">
-                  <section className="panel stack">
-                    <SectionHead title="Critical Capacity Constraint & Unit Verification">
-                      <Pill
-                        value={hc.numerical_allocation_enabled ? "Units Verified" : "Capacity unit not verified."}
-                        tone={hc.numerical_allocation_enabled ? "ok" : "warn"}
-                      />
-                    </SectionHead>
-                    <div className="callout">
-                      <strong>Combined Listed Capacity: {hc.total_listed_capacity.toLocaleString("en-IN")} — {hc.capacity_unit_status}</strong>
-                      <p className="muted" style={{ marginTop: 6 }}>
-                        <code>vendors.csv</code> supplies a numerical capacity for each vendor (totaling 3,773 across 14 vendors) without specifying a unit. FestOS does <strong>not</strong> interpret this number as meals per day, meals per hour, or people served without explicit verification. Numerical service-capacity allocation remains disabled until an authorized organizer verifies the capacity unit.
-                      </p>
-                    </div>
-                    <Facts
-                      items={[
-                        ["Combined listed figure", hc.total_listed_capacity.toLocaleString("en-IN")],
-                        ["Capacity unit status", <strong key="u">{hc.capacity_unit_status}</strong>],
-                        ["Vendors with verified unit", `${hc.verified_unit_count} of ${ov.total_vendors}`],
-                        ["Vendors missing unit verification", `${hc.unverified_unit_count} of ${ov.total_vendors}`],
-                        [
-                          "Numerical service-capacity allocation",
-                          hc.numerical_allocation_enabled ? (
-                            <Pill value="Enabled (All units verified)" tone="ok" />
-                          ) : (
-                            <Pill value="Disabled until capacity unit is verified" tone="bad" />
-                          ),
-                        ],
-                      ]}
-                    />
-                  </section>
-
-                  <aside className="panel stack">
-                    <SectionHead title="Operating Hours Breakdown" />
-                    {hc.hours_distribution.map((h) => (
-                      <div key={h.hours} className="callout">
-                        <div className="bar">
-                          <strong>{h.hours}</strong>
-                          <Pill value={`${h.count} vendors`} tone={h.hours === "07:00-23:00" ? "ok" : "warn"} />
+              {data.fix_first.length > 0 && (
+                <section className="panel fix-first" aria-label="Do these first">
+                  <header><h2>Do these first</h2><span className="muted small">Biggest gap first. Each one disappears when it is done.</span></header>
+                  <ol>
+                    {data.fix_first.slice(0, 4).map((item) => (
+                      <li key={item.id}>
+                        <div><strong>{item.action}</strong><small>{item.why}</small></div>
+                        <span className="fix-people">{item.people ? `${formatNumber(item.people)} people` : ""}</span>
+                        <div className="fix-open">
+                          {item.vendors.slice(0, 3).map((code) => <button key={code} className="button-ghost" onClick={() => setSelectedCode(code)}>{code}</button>)}
+                          {item.vendors.length > 3 && <span className="muted small">+{item.vendors.length - 3}</span>}
                         </div>
-                        <p className="muted small" style={{ marginTop: 4 }}>
-                          Vendors: {h.vendor_codes.join(", ")}
-                        </p>
-                        {h.hours === "10:00-16:00" && (
-                          <p className="small tone-warn" style={{ marginTop: 4 }}>
-                            Note: VND04 lists "Breakfast" as its menu but operates 10:00–16:00. VND08 (Vegan, expired cert) and VND12 (Chaat counter) also operate 10:00–16:00 only.
-                          </p>
-                        )}
-                      </div>
+                      </li>
                     ))}
-                  </aside>
-                </div>
-
-                <section className="panel stack">
-                  <SectionHead title="Meal-Window Vendor Availability Matrix">
-                    <span className="muted small">Inspect vendor availability and certificate compliance across Breakfast, Mid-day, Lunch, Evening, and Dinner</span>
-                  </SectionHead>
-                  <DataTable
-                    rows={hc.meal_windows}
-                    rowKey={(w) => w.key}
-                    empty="No meal windows configured."
-                    columns={[
-                      { label: "Service Window", cell: (w) => <strong>{w.label}</strong> },
-                      { label: "Hours", cell: (w) => <span>{w.window}</span> },
-                      {
-                        label: "Total Open Vendors",
-                        className: "num",
-                        cell: (w) => <strong>{w.total_vendors}</strong>,
-                      },
-                      {
-                        label: "Valid Beyond Festival",
-                        cell: (w) => (
-                          <span>
-                            <strong>{w.valid_beyond_codes.length}</strong> ({w.valid_beyond_codes.join(", ") || "None"})
-                          </span>
-                        ),
-                      },
-                      {
-                        label: "Expiring 31 Oct (Boundary)",
-                        cell: (w) => (
-                          <span>
-                            <strong>{w.expiring_codes.length}</strong> ({w.expiring_codes.join(", ") || "None"})
-                          </span>
-                        ),
-                      },
-                      {
-                        label: "Expired Certificate (Non-Compliant)",
-                        cell: (w) =>
-                          w.expired_codes.length > 0 ? (
-                            <Pill value={`${w.expired_codes.length} (${w.expired_codes.join(", ")})`} tone="bad" />
-                          ) : (
-                            <span className="muted">0</span>
-                          ),
-                      },
-                    ]}
-                  />
+                  </ol>
                 </section>
+              )}
 
-                <section className="panel stack">
-                  <SectionHead title="Per-Vendor Hours & Capacity Unit Verification">
-                    <span className="muted small">Click any vendor to verify its capacity unit or operating window</span>
-                  </SectionHead>
-                  <DataTable
-                    rows={data.vendors}
-                    rowKey={(v) => v.code}
-                    onRow={(v) => setSelectedCode(v.code)}
-                    empty="No vendors."
-                    columns={[
-                      { label: "Vendor", cell: (v) => <strong>{v.code} · {v.name}</strong> },
-                      { label: "Menu", cell: (v) => <span>{v.menu}</span> },
-                      { label: "Operating Hours", cell: (v) => <strong>{v.hours}</strong> },
-                      {
-                        label: "Breakfast (07–10)",
-                        cell: (v) => <Pill value={v.meal_windows.includes("breakfast") ? "Open" : "Closed"} tone={v.meal_windows.includes("breakfast") ? "ok" : "bad"} />,
-                      },
-                      {
-                        label: "Lunch (12–15)",
-                        cell: (v) => <Pill value={v.meal_windows.includes("lunch") ? "Open" : "Closed"} tone={v.meal_windows.includes("lunch") ? "ok" : "bad"} />,
-                      },
-                      {
-                        label: "Evening (16–19)",
-                        cell: (v) => <Pill value={v.meal_windows.includes("evening") ? "Open" : "Closed"} tone={v.meal_windows.includes("evening") ? "ok" : "bad"} />,
-                      },
-                      {
-                        label: "Dinner (19–23)",
-                        cell: (v) => <Pill value={v.meal_windows.includes("dinner") ? "Open" : "Closed"} tone={v.meal_windows.includes("dinner") ? "ok" : "bad"} />,
-                      },
-                      {
-                        label: "Listed Capacity",
-                        className: "num",
-                        cell: (v) => <strong>{v.capacity ?? "—"}</strong>,
-                      },
-                      {
-                        label: "Capacity Unit",
-                        cell: (v) =>
-                          v.capacity_unit ? (
-                            <Pill value={`${v.capacity_unit} (Verified)`} tone="ok" />
-                          ) : (
-                            <Pill value="Capacity unit not verified." tone="warn" />
-                          ),
-                      },
-                    ]}
-                  />
-                </section>
-              </div>
-            )}
+              <Tabs
+                value={sectionTab}
+                onChange={setSectionTab}
+                options={[
+                  ["directory", "Directory"],
+                  ["compliance", `Compliance and diet (${data.alerts.length})`],
+                  ["hours", "Hours and capacity"],
+                  ["interruption", `Interruptions${data.interruptions.length ? ` (${data.interruptions.length})` : ""}`],
+                ]}
+              />
 
-            {/* SECTION E: VENDOR INTERRUPTION & RECOVERY SIMULATOR */}
-            {sectionTab === "interruption" && (
-              <div className="stack">
-                <section className="panel stack">
-                  <SectionHead title="Vendor Interruption & Recovery Simulator">
-                    <span className="muted small">
-                      Simulation is kept strictly separate from live vendor status changes. Demand is never automatically redirected.
-                    </span>
-                  </SectionHead>
-
-                  <div className="toolbar">
-                    <Field label="Select vendor to report unavailable">
-                      <select
-                        value={simulatingVendorCode}
-                        onChange={(e) => setSimulatingVendorCode(e.target.value)}
-                      >
-                        {data.vendors.map((v) => (
-                          <option key={v.code} value={v.code}>
-                            {v.code} — {v.name} ({v.menu} · {v.dietary_options.join(", ")})
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Interruption reason / scenario note">
-                      <input
-                        type="text"
-                        placeholder="e.g. Equipment breakdown, hygiene suspension, staff shortage..."
-                        value={simulationReason}
-                        onChange={(e) => setSimulationReason(e.target.value)}
-                        style={{ minWidth: 340 }}
-                      />
-                    </Field>
-                    {can("vendors.write") && (
-                      <button
-                        className="button-primary"
-                        disabled={simulateAction.isPending}
-                        onClick={() => simulateAction.mutate()}
-                      >
-                        <ShieldAlert size={16} /> Report Vendor Unavailable (Simulate)
-                      </button>
-                    )}
+              {sectionTab === "directory" && (
+                <section aria-label="Vendor directory">
+                  <div className="filters">
+                    <input type="search" aria-label="Search vendors" placeholder="Search name, ID, menu or diet" value={search} onChange={(e) => setSearch(e.target.value)} />
+                    {([["all", "All"], ["valid", "Valid"], ["expired", "Expired"], ["expiring", "Expiring"], ["attention", "Requires attention"]] as const).map(([key, label]) => (
+                      <button key={key} type="button" className={filterBy === key ? "chip active" : "chip"} onClick={() => setFilterBy(key)}>{label} {counts[key]}</button>
+                    ))}
+                    <select aria-label="Dietary coverage" value={dietaryFilter} onChange={(e) => setDietaryFilter(e.target.value)}>
+                      <option value="">Any diet</option>
+                      {di.coverage_matrix.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                    </select>
+                    <select aria-label="Operating hours" value={hoursFilter} onChange={(e) => setHoursFilter(e.target.value)}>
+                      <option value="">Any hours</option>
+                      {hourOptions.map((h) => <option key={h}>{h}</option>)}
+                    </select>
+                    <label className="check"><input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} /> Archived</label>
                   </div>
-                  <ErrorNote error={simulateAction.error} />
+                  <QueryState query={includeArchived ? archived : intelligence}>
+                    <DataTable rows={filteredVendors} columns={directoryColumns} rowKey={(v) => v.code} onRow={(v) => setSelectedCode(v.code)} empty="No vendors match these filters." />
+                  </QueryState>
+                  <p className="muted small vendor-foot">
+                    {data.procurement_scope_note.message} <Link className="link" to="/venues">Inventory</Link> · <Link className="link" to="/finance">Finance</Link>
+                  </p>
                 </section>
+              )}
 
-                {(activeInterruption ?? data.interruptions[0]) && (() => {
-                  const current = activeInterruption ?? data.interruptions[0];
-                  return (
+              {sectionTab === "compliance" && (
+                <>
+                  <section className="panel">
+                    <header><h2>Who can feed whom, day by day</h2><span className="muted small">Declared need, listed option and verified safety are kept separate</span></header>
+                    <div className="table-wrap flat">
+                      <table className="coverage-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Need</th>
+                            <th scope="col" className="num">People</th>
+                            <th scope="col">Listed by</th>
+                            {days.map((d) => <th key={d} scope="col">{shortDate(d)}</th>)}
+                            <th scope="col">Verified safe</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {di.coverage_matrix.map((r) => (
+                            <tr key={r.key}>
+                              <th scope="row">{r.label}</th>
+                              <td className="num">{r.participant_count ? formatNumber(r.participant_count) : <span className="muted">None declared</span>}</td>
+                              <td>{r.listed_codes.join(", ") || <span className="over-text">Nobody</span>}</td>
+                              {r.days.map((d) => (
+                                <td key={d.day} className={DAY_STATE[d.state].className} title={[...d.clear, ...d.boundary].join(", ") || "No compliant vendor"}>
+                                  {DAY_STATE[d.state].label}<small>{d.clear.length + d.boundary.length ? `${d.clear.length + d.boundary.length} vendor${d.clear.length + d.boundary.length === 1 ? "" : "s"}` : ""}</small>
+                                </td>
+                              ))}
+                              <td>{r.independently_verified_codes.join(", ") || <span className="muted">Not verified</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="panel-note vendor-foot">
+                      A certificate ending on a day is shown as Check expiry for that day and does not count after it. {formatNumber(di.blank_dietary_participants)} of {formatNumber(di.total_participants)} participants left diet blank, so they are unknown, not covered. <Link className="link" to="/participants">Review participants</Link>
+                    </p>
+                  </section>
+
+                  <div className="vendor-split">
+                    <section className="panel">
+                      <header><h2>Alerts</h2><span className="muted small">Calculated from the current records</span></header>
+                      <ul className="vendor-alerts">
+                        {data.alerts.map((alert) => (
+                          <li key={alert.id} className={`severity-${alert.severity}`}>
+                            <span className="severity">{alert.severity}</span>
+                            <div>
+                              <strong>{alert.title}</strong>
+                              <small>{alert.participant_impact !== null ? `${formatNumber(alert.participant_impact)} people. ` : ""}{alert.affected_vendors.join(", ")}</small>
+                            </div>
+                            {alert.affected_vendors.length > 0 && <button className="button-ghost" onClick={() => setSelectedCode(alert.affected_vendors[0])}>Open {alert.affected_vendors[0]}</button>}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                    <section className="panel">
+                      <header><h2>Menu and label mismatches</h2><span className="muted small">{di.inconsistencies.length}</span></header>
+                      {di.inconsistencies.length ? (
+                        <ul className="stack">
+                          {di.inconsistencies.map((inc) => (
+                            <li key={`${inc.vendor_code}-${inc.key}`}>
+                              <div><button className="link" onClick={() => setSelectedCode(inc.vendor_code)}>{inc.vendor_code}</button> {inc.menu}<br /><small className="muted">Lists {inc.dietary_options.join(", ")}. Open {inc.hours}.</small></div>
+                              <Pill value={inc.resolved === "true" ? "Verified" : "Needs check"} tone={inc.resolved === "true" ? "ok" : "warn"} />
+                            </li>
+                          ))}
+                        </ul>
+                      ) : <p className="muted small">Every menu matches its labels.</p>}
+                      {nut && <p className="panel-note vendor-foot">A menu label never proves a meal is safe. Nut-free counts only after a person verifies kitchen allergen controls.</p>}
+                    </section>
+                  </div>
+                </>
+              )}
+
+              {sectionTab === "hours" && (
+                <>
+                  <div className={`capacity-note ${hc.numerical_allocation_enabled ? "verified" : ""}`} role="status">
+                    <strong>{hc.capacity_unit_status}</strong>
+                    <span>{formatNumber(hc.total_listed_capacity)} listed across {ov.total_vendors} vendors, with {hc.verified_unit_count} units confirmed. {hc.numerical_allocation_enabled ? "Comparisons are on." : "It could mean meals, people or something else, so comparisons stay off until each unit is confirmed."}</span>
+                  </div>
+
+                  <section className="panel">
+                    <header><h2>When each vendor is open</h2><span className="muted small">Select a vendor to verify it</span></header>
+                    <HoursTimeline vendors={data.vendors} windows={hc.meal_windows} onOpen={setSelectedCode} />
+                    <div className="chart-key">
+                      <span><i className="hours-key cert-valid_beyond_festival" />Valid</span>
+                      <span><i className="hours-key cert-expires_during_festival" />Expires during fest</span>
+                      <span><i className="hours-key cert-expired" />Expired, cannot be counted</span>
+                    </div>
+                  </section>
+
+                  <section className="panel">
+                    <header><h2>Vendors able to serve each meal</h2><span className="muted small">Open at that time with a certificate good for that day</span></header>
+                    <div className="table-wrap flat">
+                      <table className="coverage-table">
+                        <thead><tr><th scope="col">Meal</th>{days.map((d) => <th key={d} scope="col">{shortDate(d)}</th>)}</tr></thead>
+                        <tbody>
+                          {hc.meal_windows.map((w, i) => (
+                            <tr key={w.key}>
+                              <th scope="row">{w.label}<small>{w.window}</small></th>
+                              {hc.service_grid.map((day) => {
+                                const cell = day.windows[i];
+                                return (
+                                  <td key={day.day} className={cell.clear.length ? "day-ok" : cell.boundary.length ? "day-warn" : "day-bad"} title={[...cell.clear, ...cell.boundary].join(", ")}>
+                                    {cell.clear.length} ready<small>{cell.boundary.length ? `${cell.boundary.length} to check` : ""}</small>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {sectionTab === "interruption" && (
+                <>
+                  <section className="panel">
+                    <header><h2>Report a vendor unavailable</h2><span className="muted small">This is a simulation. No status changes and no food demand moves until someone approves it.</span></header>
+                    <form className="inline-form" onSubmit={(e) => { e.preventDefault(); simulateAction.mutate(target); }}>
+                      <select aria-label="Vendor" value={target} onChange={(e) => setSimulatingVendorCode(e.target.value)}>
+                        {data.vendors.map((v) => <option key={v.code} value={v.code}>{v.code}, {v.name}: {v.menu}</option>)}
+                      </select>
+                      <input aria-label="Reason" placeholder="What happened?" value={simulationReason} onChange={(e) => setSimulationReason(e.target.value)} />
+                      {can("vendors.write") && <button className="button-primary small" disabled={simulateAction.isPending}><ShieldAlert size={16} /> {simulateAction.isPending ? "Checking" : "See the impact"}</button>}
+                    </form>
+                    <ErrorNote error={simulateAction.error} />
+                  </section>
+
+                  {current && (
                     <InterruptionReviewPanel
+                      key={current.id}
                       base={base}
                       interruption={current}
                       canApprove={can("vendors.approve")}
@@ -1050,79 +631,50 @@ export function Vendors() {
                         queryClient.invalidateQueries();
                       }}
                     />
-                  );
-                })()}
+                  )}
 
-                {data.interruptions.length > 0 && (
-                  <section className="panel stack">
-                    <SectionHead title="Recorded Interruption Simulations & Decisions" />
-                    <DataTable
-                      rows={data.interruptions}
-                      rowKey={(i) => i.id}
-                      onRow={(i) => setActiveInterruption(i)}
-                      empty="No vendor interruptions recorded yet."
-                      columns={[
-                        { label: "ID", cell: (i) => <strong>#{i.id}</strong> },
-                        { label: "Vendor", cell: (i) => <strong>{i.vendor_code}</strong> },
-                        { label: "Reason", cell: (i) => <span>{i.reason}</span> },
-                        {
-                          label: "Status",
-                          cell: (i) => (
-                            <Pill
-                              value={i.status}
-                              tone={i.status === "approved" ? "bad" : i.status === "rejected" ? "info" : "warn"}
-                            />
-                          ),
-                        },
-                        {
-                          label: "Replacement Plan",
-                          cell: (i) => (
-                            <span>{i.replacement_codes.length > 0 ? i.replacement_codes.join(", ") : "None assigned"}</span>
-                          ),
-                        },
-                        { label: "Simulated By", cell: (i) => <span>{i.created_by_name}</span> },
-                        { label: "Created", cell: (i) => <small>{i.created_at ? formatTime(i.created_at) : "—"}</small> },
-                      ]}
-                    />
-                  </section>
-                )}
-              </div>
-            )}
+                  {data.interruptions.length > 1 && (
+                    <section className="panel">
+                      <header><h2>Earlier reports</h2></header>
+                      <DataTable
+                        rows={data.interruptions}
+                        rowKey={(i) => i.id}
+                        onRow={(i) => setActiveInterruption(i)}
+                        empty="No vendor interruptions recorded yet."
+                        columns={[
+                          { label: "Vendor", cell: (i) => <span className="mono">{i.vendor_code}</span> },
+                          { label: "Reason", cell: (i) => i.reason },
+                          { label: "Status", cell: (i) => <Pill value={i.status} tone={i.status === "approved" ? "bad" : i.status === "rejected" ? "info" : "warn"} /> },
+                          { label: "Replacements", cell: (i) => i.replacement_codes.join(", ") || "None" },
+                          { label: "By", cell: (i) => i.created_by_name },
+                          { label: "When", cell: (i) => (i.created_at ? formatTime(i.created_at) : "") },
+                        ]}
+                      />
+                    </section>
+                  )}
+                </>
+              )}
+            </>
+          );
+        })()}
+      </QueryState>
 
-            {/* VENDOR DETAIL DRAWER */}
-            {selectedCode && (
-              <VendorDetailDrawer
-                base={base}
-                code={selectedCode}
-                canWrite={can("vendors.write")}
-                onClose={() => setSelectedCode(null)}
-                onSimulateInterruption={(vcode) => {
-                  setSelectedCode(null);
-                  setSimulatingVendorCode(vcode);
-                  setSectionTab("interruption");
-                }}
-              />
-            )}
-
-            {/* CREATE VENDOR MODAL */}
-            {creatingVendor && (
-              <CreateVendorModal
-                base={base}
-                onClose={() => setCreatingVendor(false)}
-              />
-            )}
-
-            {/* IMPORT CSV MODAL */}
-            {importingCsv && (
-              <ImportVendorsModal
-                base={base}
-                onClose={() => setImportingCsv(false)}
-              />
-            )}
-          </div>
-        );
-      })()}
-    </QueryState>
+      {selectedCode && (
+        <VendorDetailDrawer
+          base={base}
+          code={selectedCode}
+          canWrite={can("vendors.write")}
+          onClose={() => setSelectedCode(null)}
+          onSimulateInterruption={(vcode) => {
+            setSelectedCode(null);
+            setSimulatingVendorCode(vcode);
+            setSectionTab("interruption");
+          }}
+        />
+      )}
+      {creatingVendor && <CreateVendorModal base={base} onClose={() => setCreatingVendor(false)} />}
+      {importingCsv && <ImportVendorsModal base={base} onClose={() => setImportingCsv(false)} />}
+    </div>
   );
 }
 
@@ -1180,12 +732,10 @@ function InterruptionReviewPanel({
 
   return (
     <section className="panel stack">
-      <SectionHead title={`Interruption Analysis #${interruption.id}: ${tv.code} (${tv.name})`}>
-        <Pill
-          value={`Status: ${interruption.status}`}
-          tone={interruption.status === "approved" ? "bad" : interruption.status === "rejected" ? "info" : "warn"}
-        />
-      </SectionHead>
+      <header>
+        <h2>If {tv.name} ({tv.code}) stops serving</h2>
+        <Pill value={interruption.status} tone={interruption.status === "approved" ? "bad" : interruption.status === "rejected" ? "info" : "warn"} />
+      </header>
 
       <div className="callout">
         <strong>{rep.coverage_verdict}</strong>
@@ -1196,7 +746,7 @@ function InterruptionReviewPanel({
 
       <div className="ops-grid">
         <div className="stack">
-          <h3>1–5. Interrupted Vendor Profile</h3>
+          <h3>What this vendor provides</h3>
           <Facts
             items={[
               ["Vendor", `${tv.code} · ${tv.name}`],
@@ -1212,7 +762,7 @@ function InterruptionReviewPanel({
         </div>
 
         <div className="stack">
-          <h3>9. Uncovered Requirements & Risks</h3>
+          <h3>What would be left uncovered</h3>
           {rep.uncovered_requirements.length === 0 ? (
             <p className="muted">All declared dietary options and capacity units have verified coverage.</p>
           ) : (
@@ -1231,7 +781,8 @@ function InterruptionReviewPanel({
         </div>
       </div>
 
-      <h3>6–8 & 10. Compliant Alternative Vendors for Human Review ({rep.alternatives.length})</h3>
+      <h3>Alternatives for a person to review ({rep.alternatives.length})</h3>
+      {rep.alternatives.some((c) => !c.capacity_comparable) && <p className="muted small">Capacity unit not verified, so these vendors are not compared on volume.</p>}
       <DataTable
         rows={rep.alternatives}
         rowKey={(c) => c.code}
@@ -1253,11 +804,8 @@ function InterruptionReviewPanel({
               ]
             : []),
           { label: "Candidate", cell: (c) => <strong>{c.code} · {c.name}</strong> },
-          { label: "Menu", cell: (c) => <span>{c.menu}</span> },
-          {
-            label: "Certificate",
-            cell: (c) => <Pill value={c.certificate.label} tone={c.certificate.tone} />,
-          },
+          { label: "Menu", cell: (c) => c.menu },
+          { label: "Certificate", cell: (c) => <Pill value={CERTIFICATE_SHORT[c.certificate.status]} tone={c.certificate.tone} /> },
           {
             label: "Shared Dietary",
             cell: (c) => (
@@ -1290,17 +838,14 @@ function InterruptionReviewPanel({
                 <Pill value={`${c.hours} (misses ${c.missing_meal_windows.join(", ")})`} tone="warn" />
               ),
           },
-          {
-            label: "Capacity Check",
-            cell: (c) => <small className="muted">{c.capacity_comparison}</small>,
-          },
+          ...(rep.alternatives.some((c) => c.capacity_comparable) ? [{ label: "Capacity", cell: (c: InterruptionCandidate) => <small className="muted">{c.capacity_comparison}</small> }] : []),
         ]}
       />
 
       {rep.excluded_non_compliant.length > 0 && (
         <details>
           <summary className="muted small" style={{ cursor: "pointer" }}>
-            Excluded non-compliant vendors ({rep.excluded_non_compliant.length} excluded due to expired/missing certificates or interruption)
+            {rep.excluded_non_compliant.length} vendors left out because of certificates or status
           </summary>
           <ul className="muted small" style={{ marginTop: 8 }}>
             {rep.excluded_non_compliant.map((ex) => (
@@ -1314,14 +859,14 @@ function InterruptionReviewPanel({
 
       {interruption.status === "simulated" && canApprove && (
         <div className="callout stack">
-          <strong>Authorized Decision Required (vendors.approve)</strong>
+          <strong>Your decision</strong>
           <p className="muted small">
-            Approving this interruption marks <strong>{tv.code}</strong> as unavailable and records the selected replacement vendor(s) ({selectedReplacements.join(", ") || "none selected"}) in the audit log.
+            Approving marks {tv.code} unavailable and logs the replacements you selected: {selectedReplacements.join(", ") || "none yet"}.
           </p>
-          <Field label="Mandatory decision reason (written to audit log)">
+          <Field label="Reason (goes in the audit log)">
             <input
               type="text"
-              placeholder="Explain why this vendor is being marked unavailable or why simulation is rejected..."
+              placeholder="Why is this the right call?"
               value={decisionReason}
               onChange={(e) => setDecisionReason(e.target.value)}
             />
@@ -1333,14 +878,14 @@ function InterruptionReviewPanel({
               disabled={decisionReason.trim().length < 3 || approveAction.isPending}
               onClick={() => approveAction.mutate()}
             >
-              Approve & Mark {tv.code} Unavailable
+              Mark {tv.code} unavailable
             </button>
             <button
               className="button-ghost"
               disabled={decisionReason.trim().length < 3 || rejectAction.isPending}
               onClick={() => rejectAction.mutate()}
             >
-              Reject Simulation (Keep Vendor Status Unchanged)
+              Reject, keep vendor as is
             </button>
           </div>
         </div>
@@ -1545,9 +1090,7 @@ function VendorDetailDrawer({
 function VerifyVendorForm({ base, vendor, onDone }: { base: string; vendor: VendorRecord; onDone: () => void }) {
   const [operationalStatus, setOperationalStatus] = useState<string>(vendor.operational_status);
   const [capacityUnit, setCapacityUnit] = useState<string>(vendor.capacity_unit ?? "");
-  const [verifiedDietary, setVerifiedDietary] = useState<string>(
-    vendor.verified_dietary_options ? vendor.verified_dietary_options.join("; ") : vendor.dietary_options.join("; ")
-  );
+  const [verifiedDietary, setVerifiedDietary] = useState<string>(vendor.verified_dietary_options?.join("; ") ?? "");
   const [nutFreeVerified, setNutFreeVerified] = useState<boolean>(vendor.nut_free_verified);
   const [allergenVerified, setAllergenVerified] = useState<boolean>(vendor.allergen_controls_verified);
   const [crossContamNote, setCrossContamNote] = useState<string>(vendor.cross_contamination_note ?? "");
@@ -1566,10 +1109,8 @@ function VerifyVendorForm({ base, vendor, onDone }: { base: string; vendor: Vend
           operational_status: operationalStatus,
           capacity_unit: capacityUnit.trim() || "",
           clear_capacity_unit: !capacityUnit.trim(),
-          verified_dietary_options: verifiedDietary
-            .split(/[;,]/)
-            .map((s) => s.trim())
-            .filter(Boolean),
+          // Blank means nobody has checked. Pre-filling the listed diets here would verify them by accident.
+          verified_dietary_options: verifiedDietary.trim() ? verifiedDietary.split(/[;,]/).map((s) => s.trim()).filter(Boolean) : null,
           nut_free_verified: nutFreeVerified,
           allergen_controls_verified: allergenVerified,
           cross_contamination_note: crossContamNote,
@@ -1612,9 +1153,10 @@ function VerifyVendorForm({ base, vendor, onDone }: { base: string; vendor: Vend
         />
       </Field>
 
-      <Field label="Independently verified dietary options (semicolon-separated)">
+      <Field label="Diets you have checked yourself" hint={`Listed in the CSV: ${vendor.dietary_options.join(", ") || "none"}. Leave blank if nobody has checked.`}>
         <input
           type="text"
+          placeholder="Separate with semicolons"
           value={verifiedDietary}
           onChange={(e) => setVerifiedDietary(e.target.value)}
         />

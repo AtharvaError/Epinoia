@@ -212,3 +212,58 @@ def test_interruption_simulation_and_authorization():
     )
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
+
+
+def test_coverage_is_judged_day_by_day():
+    admin = client_for("admin@festos.test")
+    data = admin.get(f"/api/festivals/{festival_id(admin)}/vendors/intelligence").json()
+    matrix = {r["key"]: r for r in data["dietary_intelligence"]["coverage_matrix"]}
+    assert data["dietary_intelligence"]["service_days"] == ["2026-10-30", "2026-10-31", "2026-11-01"]
+    gluten = [d["state"] for d in matrix["gluten-free"]["days"]]
+    assert gluten == ["covered", "boundary", "gap"], "VND02 is the only listing and its certificate ends on 31 Oct"
+    assert [d["state"] for d in matrix["nut-free"]["days"]] == ["gap", "gap", "gap"]
+    assert [d["state"] for d in matrix["jain"]["days"]] == ["gap", "gap", "gap"], "VND13 is expired, and a menu line does not count as a listing"
+    assert any(a["id"] == "gluten-free-single-expiring" and "no compliant vendor" in a["title"] for a in data["alerts"])
+    assert data["hours_and_capacity"]["service_grid"][2]["windows"][0]["boundary"] == []
+
+
+def test_fix_first_ranks_the_quickest_check_for_the_biggest_gap():
+    admin = client_for("admin@festos.test")
+    items = admin.get(f"/api/festivals/{festival_id(admin)}/vendors/intelligence").json()["fix_first"]
+    ids = [i["id"] for i in items]
+    assert ids[0] == "verify-nut-free"
+    assert ids.index("confirm-jain-VND09") < ids.index("renew-jain-VND13"), "VND09 already holds a valid certificate"
+    assert "extend-gluten-free-VND02" in ids
+    assert items[-1]["id"] == "capacity-units" and items[-1]["people"] is None
+
+
+def test_a_capacity_update_does_not_verify_diets():
+    admin = client_for("admin@festos.test")
+    base = f"/api/festivals/{festival_id(admin)}/vendors"
+    saved = admin.post(f"{base}/VND09/verify", json={"capacity_unit": "meals per sitting", "reason": "Confirmed by phone"}).json()
+    assert saved["verified_dietary_options"] is None
+    assert any(i["resolved"] == "false" for i in saved["inconsistencies"]), "The Jain thali flag stays open"
+
+
+def test_renewing_a_certificate_closes_the_gap_and_keeps_the_original():
+    admin = client_for("admin@festos.test")
+    base = f"/api/festivals/{festival_id(admin)}/vendors"
+    assert admin.patch(f"{base}/VND13", json={"hygiene_certificate_expiry": "2027-06-30", "reason": "Renewed certificate seen"}).status_code == 200
+    data = admin.get(f"{base}/intelligence").json()
+    jain = next(r for r in data["dietary_intelligence"]["coverage_matrix"] if r["key"] == "jain")
+    assert [d["state"] for d in jain["days"]] == ["covered", "covered", "covered"]
+    assert not any(i["id"].endswith("jain-VND13") or i["id"] == "confirm-jain-VND09" for i in data["fix_first"])
+    vendor = next(v for v in data["vendors"] if v["code"] == "VND13")
+    assert vendor["original_pack_data"]["hygiene_certificate_expiry"] != "2027-06-30"
+
+
+def test_losing_the_only_vendor_for_a_diet_stays_visible():
+    admin = client_for("admin@festos.test")
+    base = f"/api/festivals/{festival_id(admin)}/vendors"
+    interruption = admin.post(f"{base}/VND02/interruptions/simulate", json={"reason": "Gas supply failed"}).json()
+    assert admin.post(f"{base}/interruptions/{interruption['id']}/approve", json={"reason": "Confirmed on site", "replacement_codes": []}).status_code == 200
+    data = admin.get(f"{base}/intelligence").json()
+    gluten = next(r for r in data["dietary_intelligence"]["coverage_matrix"] if r["key"] == "gluten-free")
+    assert gluten["status"] == "no_active_vendor" and gluten["tone"] == "bad"
+    assert any(a["id"] == "no-active-vendor-gluten-free" for a in data["alerts"])
+    assert any(i["id"] == "find-gluten-free" for i in data["fix_first"])

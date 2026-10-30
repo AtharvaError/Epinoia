@@ -17,8 +17,11 @@ from app.services.simulated_data import load_simulated
 
 
 def seed_roles(db) -> None:
-    permissions = {key: Permission(key=key) for key in sorted(ALL)}
-    db.add_all(permissions.values())
+    # A migration may have added some already, so only create what is missing.
+    permissions = {p.key: p for p in db.scalars(select(Permission))}
+    for key in sorted(ALL - permissions.keys()):
+        permissions[key] = Permission(key=key)
+        db.add(permissions[key])
     for key, (name, granted) in ROLES.items():
         db.add(Role(key=key, name=name, permissions=[permissions[p] for p in sorted(granted)]))
     db.flush()
