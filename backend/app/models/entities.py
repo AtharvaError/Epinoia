@@ -128,6 +128,7 @@ class Participant(FestivalScoped, SoftDeleted, Base):
     registration_status: Mapped[str] = mapped_column(String(20), server_default="registered")
     checkin_status: Mapped[str] = mapped_column(String(20), server_default="not_arrived")
     qr_token: Mapped[str | None] = mapped_column(String(64), unique=True)
+    merged_into_id: Mapped[int | None] = mapped_column(ForeignKey("participants.id"), index=True)  # Kept after a merge, so both IDs stay traceable.
     __table_args__ = (UniqueConstraint("festival_id", "code"),)
 
 
@@ -216,6 +217,18 @@ class ResourceAllocation(FestivalScoped, Base):
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     quantity: Mapped[int] = mapped_column(Integer)
     __table_args__ = (UniqueConstraint("resource_id", "event_id"), CheckConstraint("quantity > 0", name="quantity_valid"))
+
+
+class MerchandiseIssue(FestivalScoped, Base):
+    """One row per person and item. The constraint is what stops a second issue, even in a race."""
+    __tablename__ = "merchandise_issues"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    participant_id: Mapped[int] = mapped_column(ForeignKey("participants.id", ondelete="CASCADE"), index=True)
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id"))
+    item: Mapped[str] = mapped_column(String(120))
+    issued_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (UniqueConstraint("participant_id", "item"),)
 
 
 class Hostel(FestivalScoped, Base):

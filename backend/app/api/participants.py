@@ -1,6 +1,8 @@
 import csv
 import io
+import re
 import secrets
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
@@ -8,7 +10,7 @@ import openpyxl
 import segno
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,15 +19,18 @@ from app.api.common import by_code, csv_safe, like, ordered, paged
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
 from app.models import (
-    AccommodationAllocation, Contingent, DataIssue, Event, Festival, Hostel, Participant, Registration, Room, Route,
+    AccommodationAllocation, Contingent, DataIssue, Event, Festival, Hostel, MerchandiseIssue, Participant, Registration, Resource, Room, Route,
     TransportAssignment, User,
 )
 from app.services.audit import record
 from app.services.events import participant_clashes
+from app.services.pack_import import IST
 
 router = APIRouter(prefix="/api/festivals/{festival_id}", tags=["participants"])
 
 SENSITIVE = ("phone", "email", "gender_as_given", "accessibility_needs", "dietary_needs")
+MERGE_FIELDS = ("full_name", "college", "phone", "email", "gender_as_given", "age", "accessibility_needs", "dietary_needs", "arrival_at", "departure_at", "tshirt_size", "accommodation_required")
+MERCH_ITEMS = ("T-shirt", "ID card", "lanyard", "tote")  # Medals and special badges depend on results, so they are not desk items.
 IMPORT_LIMIT_BYTES = 5_000_000
 
 
@@ -54,6 +59,28 @@ class RegistrationIn(BaseModel):
 
 class PassCheck(BaseModel):
     token: str = Field(min_length=8, max_length=64)
+
+
+class MerchClaim(PassCheck):
+    item: str = Field(max_length=120)
+
+    @model_validator(mode="after")
+    def known_item(self):
+        if self.item not in MERCH_ITEMS:
+            raise ValueError(f"Only these items are issued at the desk: {', '.join(MERCH_ITEMS)}")
+        return self
+
+
+class MergeIn(BaseModel):
+    keep: str
+    drop: str
+    take_from_drop: list[str] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class DismissIn(BaseModel):
+    codes: list[str] = Field(min_length=2, max_length=10)
+    reason: str = Field(min_length=5, max_length=500)
 
 
 class DeleteReason(BaseModel):
@@ -248,13 +275,47 @@ def read_table(filename: str, raw: bytes) -> list[dict[str, Any]]:
     raise HTTPException(400, "Upload a .csv or .xlsx file")
 
 
+def merch_given(db: Session, participant_id: int) -> list[dict[str, Any]]:
+    rows = db.execute(select(MerchandiseIssue, User.name).outerjoin(User, User.id == MerchandiseIssue.issued_by_id).where(MerchandiseIssue.participant_id == participant_id).order_by(MerchandiseIssue.id))
+    return [{"item": m.item, "issued_at": m.issued_at, "issued_by": name} for m, name in rows]
+
+
 @router.post("/passes/verify", dependencies=[Depends(require("participants.checkin"))])
 def verify_pass(body: PassCheck, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     p = db.scalar(select(Participant).where(Participant.festival_id == festival.id, Participant.qr_token == body.token, Participant.deleted_at.is_(None)))
     if not p:
         return {"valid": False}
     return {"valid": True, "code": p.code, "full_name": p.full_name, "college": p.college, "checkin_status": p.checkin_status,
-            "registration_status": p.registration_status}
+            "registration_status": p.registration_status, "tshirt_size": p.tshirt_size, "merch": merch_given(db, p.id), "merch_items": MERCH_ITEMS}
+
+
+@router.post("/passes/merch", status_code=201, dependencies=[Depends(require("participants.checkin"))])
+def issue_merch(body: MerchClaim, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    p = db.scalar(select(Participant).where(Participant.festival_id == festival.id, Participant.qr_token == body.token, Participant.deleted_at.is_(None)).with_for_update())
+    if not p:
+        raise HTTPException(404, "This pass is not valid")
+    if p.registration_status == "cancelled":
+        raise HTTPException(409, f"{p.code} has a cancelled registration")
+    earlier = next((m for m in merch_given(db, p.id) if m["item"] == body.item), None)
+    if earlier:
+        when = earlier["issued_at"].astimezone(IST).strftime("%d %b, %H:%M")
+        message = f"{p.full_name} ({p.code}) already collected this {body.item} on {when}, issued by {earlier['issued_by'] or 'an unknown user'}"
+        record(db, user, festival.id, "merch.duplicate_claim", "participant", p.code, f"Refused a second {body.item} for {p.code}, claimed at {user.name}'s desk")
+        db.commit()
+        raise HTTPException(409, message)
+    if body.item == "T-shirt" and not p.tshirt_size:
+        raise HTTPException(409, f"{p.code} has no T-shirt size on record. Confirm the size first.")
+    query = select(Resource).where(Resource.festival_id == festival.id, Resource.kind == "merch", Resource.name == body.item)
+    if body.item == "T-shirt":
+        query = query.where(Resource.size == p.tshirt_size)
+    stock = db.scalar(query.with_for_update())
+    if not stock or stock.quantity <= stock.reserved_quantity:
+        raise HTTPException(409, f"No unreserved {body.item} stock is left")
+    stock.quantity -= 1
+    db.add(MerchandiseIssue(festival_id=festival.id, participant_id=p.id, resource_id=stock.id, item=body.item, issued_by_id=user.id))
+    record(db, user, festival.id, "merch.issue", "participant", p.code, f"{user.name} issued a {body.item} to {p.code}")
+    db.commit()
+    return {"full_name": p.full_name, "item": body.item, "size": stock.size}
 
 
 @router.post("/passes/check-in", dependencies=[Depends(require("participants.checkin"))])
@@ -271,6 +332,97 @@ def check_in(body: PassCheck, festival: Festival = Depends(festival_access), use
     record(db, user, festival.id, "participant.checkin", "participant", p.code, f"{p.full_name} ({p.code}) checked in")
     db.commit()
     return {"code": p.code, "full_name": p.full_name, "checkin_status": p.checkin_status}
+
+
+def duplicate_groups(db: Session, festival_id: int) -> list[list[str]]:
+    """Open duplicate flags, grouped. A group with only one live record left needs no decision."""
+    issues = db.scalars(select(DataIssue).where(DataIssue.festival_id == festival_id, DataIssue.issue == "possible_duplicate", DataIssue.status == "open"))
+    groups = {tuple(sorted({i.entity_code, *re.findall(r"\bP\d+\b", i.detail or "")})) for i in issues}
+    live = set(db.scalars(select(Participant.code).where(Participant.festival_id == festival_id, Participant.deleted_at.is_(None))))
+    return sorted(kept for kept in (tuple(c for c in g if c in live) for g in groups) if len(kept) > 1)
+
+
+def close_duplicates(db: Session, festival_id: int, codes: Collection[str], status: str) -> None:
+    for issue in db.scalars(select(DataIssue).where(DataIssue.festival_id == festival_id, DataIssue.issue == "possible_duplicate", DataIssue.status == "open", DataIssue.entity_code.in_(codes))):
+        issue.status = status
+
+
+def compared(db: Session, p: Participant) -> dict[str, Any]:
+    room = db.scalar(select(Room.code).join(AccommodationAllocation, AccommodationAllocation.room_id == Room.id).where(AccommodationAllocation.participant_id == p.id, AccommodationAllocation.status != "cancelled"))
+    events = db.scalar(select(func.count()).select_from(Registration).where(Registration.participant_id == p.id))
+    return {"code": p.code, **{f: getattr(p, f) for f in MERGE_FIELDS}, "events": events, "room": room, "checkin_status": p.checkin_status}
+
+
+@router.get("/participants/duplicates", dependencies=[Depends(require("participants.read_sensitive"))])
+def list_duplicates(festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+    people = {p.code: p for p in db.scalars(select(Participant).where(Participant.festival_id == festival.id, Participant.deleted_at.is_(None)))}
+    return [[compared(db, people[code]) for code in group] for group in duplicate_groups(db, festival.id)]
+
+
+@router.post("/participants/duplicates/dismiss", status_code=204, dependencies=[Depends(require("participants.write")), Depends(require("participants.read_sensitive"))])
+def dismiss_duplicates(body: DismissIn, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    close_duplicates(db, festival.id, body.codes, "dismissed")
+    record(db, user, festival.id, "participant.not_duplicate", "participant", body.codes[0], f"{user.name} marked {', '.join(body.codes)} as different people", reason=body.reason)
+    db.commit()
+
+
+@router.post("/participants/merge", dependencies=[Depends(require("participants.write")), Depends(require("participants.read_sensitive"))])
+def merge_participants(body: MergeIn, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if body.keep == body.drop:
+        raise HTTPException(422, "Choose two different records")
+    unknown = set(body.take_from_drop) - set(MERGE_FIELDS)
+    if unknown:
+        raise HTTPException(422, f"These fields cannot be merged: {', '.join(sorted(unknown))}")
+    rows = {p.code: p for p in db.scalars(select(Participant).where(Participant.festival_id == festival.id, Participant.code.in_((body.keep, body.drop)), Participant.deleted_at.is_(None)).order_by(Participant.id).with_for_update())}
+    if len(rows) != 2:
+        raise HTTPException(404, "One of these records no longer exists. It may already be merged.")
+    keep, drop = rows[body.keep], rows[body.drop]
+    for field in body.take_from_drop:
+        setattr(keep, field, getattr(drop, field))
+
+    kept_events = set(db.scalars(select(Registration.event_id).where(Registration.participant_id == keep.id)))
+    for registration in db.scalars(select(Registration).where(Registration.participant_id == drop.id)):
+        if registration.event_id in kept_events:
+            db.delete(registration)
+        else:
+            registration.participant_id = keep.id
+    kept_routes = set(db.scalars(select(TransportAssignment.route_id).where(TransportAssignment.participant_id == keep.id)))
+    for ride in db.scalars(select(TransportAssignment).where(TransportAssignment.participant_id == drop.id)):
+        if ride.route_id in kept_routes:
+            db.delete(ride)
+        else:
+            ride.participant_id = keep.id
+    kept_items = set(db.scalars(select(MerchandiseIssue.item).where(MerchandiseIssue.participant_id == keep.id)))
+    both_issued = []
+    for issue in db.scalars(select(MerchandiseIssue).where(MerchandiseIssue.participant_id == drop.id)):
+        if issue.item in kept_items:
+            both_issued.append(issue.item)  # Both records collected it. The second issue stays on the old record as evidence.
+        else:
+            issue.participant_id = keep.id
+    keep_stay = db.scalar(select(AccommodationAllocation).where(AccommodationAllocation.participant_id == keep.id, AccommodationAllocation.status != "cancelled"))
+    drop_stay = db.scalar(select(AccommodationAllocation).where(AccommodationAllocation.participant_id == drop.id, AccommodationAllocation.status != "cancelled"))
+    freed_bed = bool(keep_stay and drop_stay)
+    if drop_stay:
+        if keep_stay:
+            drop_stay.status = "cancelled"
+        else:
+            drop_stay.participant_id = keep.id
+    if drop.checkin_status == "checked_in":
+        keep.checkin_status = "checked_in"
+    if not keep.qr_token and drop.qr_token:
+        keep.qr_token, drop.qr_token = drop.qr_token, None
+        db.flush()
+    drop.deleted_at, drop.merged_into_id = func.now(), keep.id
+
+    close_duplicates(db, festival.id, [drop.code], "resolved")
+    still_open = any(keep.code in group and len(group) > 2 for group in duplicate_groups(db, festival.id))
+    if not still_open:
+        close_duplicates(db, festival.id, [keep.code], "resolved")
+    # Field names and codes only: the audit log should not become a second copy of contact data.
+    record(db, user, festival.id, "participant.merge", "participant", keep.code, f"{user.name} merged {drop.code} into {keep.code}",
+           after={"kept": keep.code, "merged": drop.code, "fields_from_merged": body.take_from_drop, "freed_bed": freed_bed, "issued_to_both": both_issued}, reason=body.reason)
+    db.commit()
+    return {"kept": keep.code, "merged": drop.code, "freed_bed": freed_bed, "issued_to_both": both_issued}
 
 
 @router.get("/participants/{code}", dependencies=[Depends(require("participants.read"))])
@@ -297,6 +449,8 @@ def get_participant(code: str, festival: Festival = Depends(festival_access), us
         row["accommodation"] = None
     row["transport"] = [{"code": r.code, "name": r.name, "departure_at": r.departure_at, "status": r.status} for r in db.scalars(
         select(Route).join(TransportAssignment, TransportAssignment.route_id == Route.id).where(TransportAssignment.participant_id == p.id))]
+    row["merch"] = merch_given(db, p.id)
+    row["merged_from"] = list(db.scalars(select(Participant.code).where(Participant.merged_into_id == p.id).order_by(Participant.code)))
     row["issues"] = [{"issue": i.issue, "detail": i.detail} for i in db.scalars(
         select(DataIssue).where(DataIssue.festival_id == festival.id, DataIssue.entity_type == "participant", DataIssue.entity_code == code, DataIssue.status == "open"))]
     return row

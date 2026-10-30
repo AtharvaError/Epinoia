@@ -9,8 +9,9 @@ from app.api.common import like, paged
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
 from app.models import (
-    AuditLog, Budget, ChangeApproval, Department, Event, Festival, Hostel, Registration, Room, Route, Simulation, TransportAssignment, User, Vehicle, Venue, Volunteer, VolunteerShift,
+    AuditLog, Budget, ChangeApproval, Contingent, Department, Event, Festival, Hostel, Participant, Registration, Resource, ResourceAllocation, Room, Route, Simulation, TransportAssignment, User, Vehicle, Vendor, Venue, Volunteer, VolunteerShift,
 )
+from app.services.equipment import is_usable
 from app.services.housing import ACTIVE, AccommodationAllocation
 from app.simulation import engine
 from app.simulation.scenarios import SCENARIOS
@@ -52,6 +53,8 @@ def options(festival: Festival = Depends(festival_access), db: Session = Depends
     vehicles = dict(db.execute(select(Vehicle.id, Vehicle.code).where(Vehicle.festival_id == f)).all())
     venues = db.scalars(select(Venue).where(Venue.festival_id == f).order_by(Venue.name)).all()
     venue_names = {v.id: v.name for v in venues}
+    booked = dict(db.execute(select(ResourceAllocation.resource_id, func.count()).where(ResourceAllocation.festival_id == f).group_by(ResourceAllocation.resource_id)).all())
+    members = dict(db.execute(select(Participant.contingent_id, func.count()).where(Participant.festival_id == f, Participant.deleted_at.is_(None)).group_by(Participant.contingent_id)).all())
     return {
         "scenarios": [{"key": k, "label": s.label} for k, s in SCENARIOS.items()],
         "hostels": [{"code": h.code, "name": h.name, "kind": h.kind, "capacity": capacity.get(h.id, 0), "occupied": occupied.get(h.id, 0)}
@@ -62,6 +65,11 @@ def options(festival: Festival = Depends(festival_access), db: Session = Depends
         "routes": [{"code": r.code, "name": r.name, "expected_arrival_at": r.expected_arrival_at, "passengers": riders.get(r.id, 0), "vehicle": vehicles.get(r.vehicle_id), "status": r.status}
                    for r in db.scalars(select(Route).where(Route.festival_id == f).order_by(Route.departure_at))],
         "volunteers": [{"code": v.code, "name": v.name, "shifts": shifts.get(v.id, 0)} for v in db.scalars(select(Volunteer).where(Volunteer.festival_id == f, Volunteer.status == "active").order_by(Volunteer.code))],
+        "equipment": [{"code": r.code, "name": r.name, "location": r.location, "quantity": r.quantity, "events": booked.get(r.id, 0)}
+                      for r in db.scalars(select(Resource).where(Resource.festival_id == f, Resource.kind == "logistics").order_by(Resource.name, Resource.code)) if is_usable(r)],
+        "vendors": [{"code": v.code, "name": v.name, "menu": v.menu, "capacity": v.capacity, "dietary_options": v.dietary_options}
+                    for v in db.scalars(select(Vendor).where(Vendor.festival_id == f, Vendor.status == "active").order_by(Vendor.code))],
+        "contingents": [{"code": c.code, "college": c.college, "members": members.get(c.id, 0)} for c in db.scalars(select(Contingent).where(Contingent.festival_id == f).order_by(Contingent.college))],
         "budgets": [{"department": d.name, "approved": b.approved_amount} for b, d in db.execute(select(Budget, Department).join(Department, Department.id == Budget.department_id).where(Budget.festival_id == f).order_by(Department.name))],
     }
 

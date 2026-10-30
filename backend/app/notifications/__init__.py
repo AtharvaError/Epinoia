@@ -8,7 +8,7 @@ from app.models import Notification, Role, User
 MODULE_ROLES = {
     "participants": {"event_coordinator"}, "events": {"event_coordinator"}, "venues": {"event_coordinator"},
     "volunteers": {"volunteer_head"}, "transportation": {"transport_head"}, "accommodation": {"accommodation_head"},
-    "finance": {"finance_head"},
+    "finance": {"finance_head"}, "vendors": {"finance_head"},
 }
 
 

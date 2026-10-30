@@ -12,7 +12,7 @@ from typing import Any
 
 MODULES = {
     "participants": "Participants", "events": "Events", "venues": "Venues & Resources", "volunteers": "Volunteers",
-    "transportation": "Transportation", "accommodation": "Accommodation", "finance": "Finance",
+    "transportation": "Transportation", "accommodation": "Accommodation", "vendors": "Food & Vendors", "finance": "Finance",
 }
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -37,6 +37,8 @@ EDGES = (
     Edge("venues", "events", "hosts"),
     Edge("volunteers", "events", "staff"),
     Edge("transportation", "participants", "carries"),
+    Edge("vendors", "participants", "feed"),
+    Edge("vendors", "finance", "are paid by"),
     Edge("finance", "accommodation", "funds"),
     Edge("finance", "events", "funds"),
     Edge("finance", "transportation", "funds"),

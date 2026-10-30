@@ -51,7 +51,7 @@ def test_capacity_decision_suggests_a_venue_that_seats_everyone(director, base):
 
 
 def test_every_action_names_a_real_permission_and_page(director, base):
-    pages = ("/ripple", "/safety", "/events", "/accommodation", "/volunteers", "/finance", "/participants")
+    pages = ("/ripple", "/safety", "/events", "/accommodation", "/volunteers", "/finance", "/participants", "/vendors")
     for action in actions(director, base):
         assert action["permission"] in director.get("/api/auth/me").json()["permissions"]
         assert urlsplit(action["to"]).path in pages

@@ -6,8 +6,10 @@ from urllib.parse import urlencode
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.models import Event, Festival, Venue
+from app.models import Event, Festival, Vendor, Venue
+from app.services.equipment import equipment_gaps
 from app.services.events import outside_venue_hours, venue_conflicts
+from app.services.food import coverage, diet_counts
 from app.services.pack_import import IST
 from app.services.schedule_plan import SUITABLE_VENUES, TURNAROUND
 
@@ -194,7 +196,23 @@ def alerts(db: Session, f: int, festival: Festival, events: list[dict[str, Any]]
     expiring = _one(db, "SELECT count(*) FROM vendors WHERE festival_id=:f AND hygiene_certificate_expiry BETWEEN :d AND :e", f=f, d=festival.start_date, e=festival.end_date)
     if expired or expiring:
         add("critical" if expired else "high", "Vendors", f"{expired + expiring} vendor hygiene certificates need action",
-            f"{expired} already expired, {expiring} expire during the festival.", "pack")
+            f"{expired} already expired, {expiring} expire during the festival.", "pack", link("Open vendors", "/vendors", "dashboard.read"))
+
+    vendors = list(db.scalars(select(Vendor).where(Vendor.festival_id == f)))
+    uncovered = [c for c in coverage(vendors, diet_counts(db, f), festival) if c["people"] and not c["vendors"]]
+    if uncovered:
+        add("critical", "Vendors", f"{sum(c['people'] for c in uncovered):,} participants have no vendor for their diet",
+            f"No compliant vendor lists: {', '.join(c['diet'] for c in uncovered)}.", "pack", link("See dietary coverage", "/vendors", "dashboard.read"))
+
+    gaps = equipment_gaps(db, f)
+    if gaps:
+        add("high", "Venues", f"{len({g['code'] for g in gaps})} events are short of equipment", f"Worst shortage: {gaps[0]['item']} for {gaps[0]['name']}.", "pack",
+            link("See equipment gaps", "/events", "events.read", tab="conflicts"))
+
+    duplicates = _one(db, "SELECT count(*) FROM data_issues WHERE festival_id=:f AND status='open' AND issue='possible_duplicate'", f=f)
+    if duplicates:
+        add("medium", "Participants", f"{duplicates} records look like duplicates", "Review each pair, then merge them or mark them as different people.", "pack",
+            link("Review duplicates", "/participants", "participants.read_sensitive", duplicates=1))
 
     short = [e for e in events if e["staffed"] < e["volunteers_needed"]]
     if short:

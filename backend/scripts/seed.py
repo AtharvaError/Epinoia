@@ -11,6 +11,7 @@ from app.auth.permissions import ALL, ROLES
 from app.config import settings
 from app.database import Base, SessionLocal
 from app.models import Festival, Permission, Role
+from app.services.equipment import apply_inventory_plan
 from app.services.housing import apply_sample_plan
 from app.services.pack_import import load_pack
 from app.services.simulated_data import load_simulated
@@ -40,6 +41,7 @@ def seed(reset: bool = False) -> None:
         load_simulated(db, festival.id)
         db.flush()
         apply_sample_plan(db, festival)
+        apply_inventory_plan(db, festival.id)
         db.commit()
     print("Seed complete")
 

@@ -9,6 +9,7 @@ from app.api.common import by_code, like, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import Event, Festival, Registration, Resource, ResourceAllocation, User, Venue, Volunteer, VolunteerShift
+from app.services.equipment import bookings, free_units
 from app.services.audit import record
 
 router = APIRouter(prefix="/api/festivals/{festival_id}", tags=["venues"])
@@ -152,6 +153,8 @@ def allocate_resource(code: str, body: AllocationIn, festival: Festival = Depend
         raise HTTPException(404, f"Resource {code} not found")
     event = by_code(db, Event, festival.id, body.event_code)
     available = resource_row(r)["available"]
+    if r.kind == "logistics" and event.start_at:
+        available = min(available, free_units(r.id, r.quantity, event.start_at, event.end_at, bookings(db, festival.id), skip_event=event.id))
     if body.quantity > available:
         raise HTTPException(409, f"Only {available} {r.name} available. Condition is {r.condition or 'unknown'}.")
     existing = db.scalar(select(ResourceAllocation).where(ResourceAllocation.resource_id == r.id, ResourceAllocation.event_id == event.id))

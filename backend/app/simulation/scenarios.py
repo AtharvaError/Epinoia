@@ -3,9 +3,8 @@
 An Outcome's plan holds exactly what apply() will do. Apply functions change production
 rows and only ever run inside the approval transaction in engine.py.
 """
-import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from math import ceil
@@ -20,11 +19,13 @@ from app.api.common import by_code
 from app.api.transport import affected_events, rider_counts
 from app.api.volunteers import EVENT_SKILLS, event_staffing, shift_counts
 from app.models import (
-    AccommodationAllocation, Budget, Department, Event, Expense, Festival, Hostel, Participant, Registration, Resource, Room, Route,
-    Sponsor, TransportAssignment, User, Vehicle, Venue, Volunteer, VolunteerShift,
+    AccommodationAllocation, Budget, Contingent, Department, Event, Expense, Festival, Hostel, Participant, Registration, Resource, ResourceAllocation, Room, Route,
+    Sponsor, TransportAssignment, User, Vehicle, Vendor, Venue, Volunteer, VolunteerShift,
 )
-from app.services.allocator import plan_allocation
+from app.services.allocator import nights, plan_allocation
+from app.services.equipment import Booking, bookings, equipment_needs, free_units, is_usable
 from app.services.events import outside_venue_hours, venue_conflicts
+from app.services.food import DIET_TAGS, SETTLEMENT, can_serve, compliance, coverage, diet_counts
 from app.services.housing import (
     ACTIVE, contingent_codes, external_commitment, hospitality_budget, occupied_counts, open_rooms, to_person, unallocated_query,
 )
@@ -36,6 +37,7 @@ PEOPLE_PER_HELPER = 40
 TIGHT_GAP = timedelta(minutes=30)
 AVERAGE_SPEED_KMH = 25
 EARLY_HOUR, LATE_HOUR = 9, 21
+LATE_NIGHT_HOUR, EARLY_MORNING_HOUR = 22, 6
 
 
 class SimulationError(HTTPException):
@@ -262,15 +264,6 @@ class VenueChange(BaseModel):
         if self.start_at and self.end_at <= self.start_at:
             raise ValueError("End must be after start")
         return self
-
-
-def equipment_needs(event: Event) -> list[tuple[str, int]]:
-    needs = []
-    for part in (event.equipment_needs or "").split(";"):
-        match = re.fullmatch(r"(?:(\d+)\s+)?(.+?)s?", part.strip())
-        if match and "no special" not in part:
-            needs.append((match[2], int(match[1] or 1)))
-    return needs
 
 
 def usable_stock(db: Session, festival_id: int, item: str) -> tuple[int, int]:
@@ -730,6 +723,281 @@ def apply_budget_reduction(db: Session, festival: Festival, plan: dict[str, Any]
     return "Budget reduced"
 
 
+# --- Scenario F: equipment fails -----------------------------------------------------------
+
+class EquipmentFailure(BaseModel):
+    resource_code: str
+    units: int = Field(ge=1, le=100_000)
+
+
+def equipment_failure(db: Session, festival: Festival, change: EquipmentFailure) -> Outcome:
+    fid = festival.id
+    lot = by_code(db, Resource, fid, change.resource_code)
+    if not is_usable(lot):
+        raise SimulationError(f"{lot.name} at {lot.location} is not in working order, so it cannot fail")
+    if change.units > lot.quantity:
+        raise SimulationError(f"{lot.location} holds {lot.quantity} {lot.name}, not {change.units}")
+    booked = bookings(db, fid)
+    mine = sorted((b for b in booked if b.resource_id == lot.id), key=lambda b: b.start)
+    others = [b for b in booked if b.resource_id != lot.id]
+    spares = [r for r in db.scalars(select(Resource).where(Resource.festival_id == fid, Resource.name == lot.name, Resource.id != lot.id).order_by(Resource.code)) if is_usable(r)]
+    events = {e.id: e for e in db.scalars(select(Event).where(Event.id.in_([b.event_id for b in mine])))}
+    left = lot.quantity - change.units
+    kept: list[Booking] = []
+    outcomes = []
+    for b in mine:
+        event = events[b.event_id]
+        keep = max(0, min(b.quantity, free_units(lot.id, left, b.start, b.end, kept)))
+        if keep:
+            kept.append(replace(b, quantity=keep))
+        short = b.quantity - keep
+        moves = []
+        venue = event.venue.name if event.venue else None
+        for spare in sorted(spares, key=lambda r: (r.location != venue, -free_units(r.id, r.quantity, b.start, b.end, others))):
+            if not short:
+                break
+            take = min(short, free_units(spare.id, spare.quantity, b.start, b.end, others))
+            if take > 0:
+                moves.append({"resource_id": spare.id, "quantity": take, "location": spare.location})
+                others.append(Booking(None, spare.id, b.event_id, take, b.start, b.end))
+                short -= take
+        outcomes.append({"event": event, "booking": b, "keep": keep, "moves": moves, "short": short})
+    changed = [o for o in outcomes if o["keep"] != o["booking"].quantity]
+    stranded = [o for o in changed if o["short"]]
+
+    def to_events(_: set[Any]) -> Hop:
+        impacts = []
+        for o in changed:
+            e = o["event"]
+            for m in o["moves"]:
+                impacts.append(Impact("events", "medium", "fact", f"{e.name} at {ist(e.start_at)} takes {m['quantity']} {lot.name} from {m['location']} instead.", "Send the replacement before setup.", e.code))
+            if o["short"]:
+                impacts.append(Impact("events", "critical", "fact", f"{e.name} at {ist(e.start_at)} is {o['short']} {lot.name} short, and no working spare is free then.", f"Hire {lot.name} or repair stock in time.", e.code))
+        return Hop({o["event"].code for o in changed}, impacts)
+
+    def to_participants(_: set[Any]) -> Hop:
+        ids = [o["event"].id for o in stranded]
+        if not ids:
+            return Hop()
+        codes = set(db.scalars(select(Participant.code).join(Registration, Registration.participant_id == Participant.id).where(Registration.event_id.in_(ids), Participant.deleted_at.is_(None))))
+        return Hop(codes, [Impact("participants", "high", "fact", f"{plural(len(codes), 'registrant')} are in events left without this equipment.", "Tell them if the event changes.")])
+
+    def to_volunteers(_: set[Any]) -> Hop:
+        ids = [o["event"].id for o in changed if o["moves"]]
+        if not ids:
+            return Hop()
+        staff = set(db.scalars(select(VolunteerShift.volunteer_id).where(VolunteerShift.event_id.in_(ids), VolunteerShift.status != "cancelled")))
+        return Hop(staff, [Impact("volunteers", "low", "fact", f"{plural(len(staff), 'volunteer')} on these events should expect the replacement kit.", "Name who carries it.")])
+
+    actions = [action(f"Replace at {o['event'].name}", ", ".join(f"{m['quantity']} from {m['location']}" for m in o["moves"]), "venues") for o in changed if o["moves"]][:4]
+    if stranded:
+        actions.append(action(f"Hire {sum(o['short'] for o in stranded)} {lot.name}", f"No working spare is free for {', '.join(o['event'].name for o in stranded[:3])}.", "venues"))
+    return Outcome(
+        title=f"{change.units} {lot.name} fail at {lot.location}",
+        headline=f"{plural(len(changed), 'event')} affected. {len(changed) - len(stranded)} can be covered from spares and {len(stranded)} cannot." if changed else "No event depends on these units, so nothing else changes.",
+        seed_module="venues", seed_records={lot.code},
+        seed_impacts=[Impact("venues", "high" if changed else "low", "fact", f"{change.units} of {lot.quantity} {lot.name} at {lot.location} stop working.", "They move to under repair when this is applied.", lot.code)],
+        rules={("venues", "events"): to_events, ("events", "participants"): to_participants, ("events", "volunteers"): to_volunteers},
+        current_state=[stat("Lot", lot.code), stat("Location", lot.location or "Unknown"), stat("Working units", lot.quantity), stat("Events booked", len(mine)), stat("Working spares elsewhere", sum(r.quantity for r in spares))],
+        before_after=[change_row(f"Working {lot.name} at {lot.location}", lot.quantity, left), change_row("Events changing equipment", 0, len(changed)), change_row("Events left short", 0, len(stranded))],
+        actions=actions,
+        assumptions=["30 minutes of turnaround to move kit between events.", "The data has no distances between venues, so moving kit cannot be timed exactly.", "The pack has no hire prices, so replacing kit has no stated cost."],
+        resources=[f"{m['quantity']} {lot.name} from {m['location']}" for o in changed for m in o["moves"]],
+        needs_reason=f"{plural(len(stranded), 'event')} would go ahead short of equipment." if stranded else None,
+        plan={"resource_id": lot.id, "units": change.units, "changes": [{"allocation_id": o["booking"].allocation_id, "keep": o["keep"], "moves": [{"resource_id": m["resource_id"], "quantity": m["quantity"]} for m in o["moves"]]} for o in changed]},
+    )
+
+
+def apply_equipment_failure(db: Session, festival: Festival, plan: dict[str, Any]) -> str:
+    lot = db.get(Resource, plan["resource_id"])
+    if plan["units"] == lot.quantity:
+        lot.condition = "under repair"
+    else:
+        lot.quantity -= plan["units"]
+        lot.reserved_quantity = min(lot.reserved_quantity, lot.quantity)
+        split = db.scalar(select(func.count()).select_from(Resource).where(Resource.festival_id == festival.id, Resource.code.like(f"{lot.code}-F%"))) or 0
+        db.add(Resource(festival_id=festival.id, code=f"{lot.code}-F{split + 1}", kind=lot.kind, name=lot.name, quantity=plan["units"], location=lot.location, condition="under repair"))
+    for item in plan["changes"]:
+        allocation = db.get(ResourceAllocation, item["allocation_id"])
+        for move in item["moves"]:
+            existing = db.scalar(select(ResourceAllocation).where(ResourceAllocation.resource_id == move["resource_id"], ResourceAllocation.event_id == allocation.event_id))
+            if existing:
+                existing.quantity += move["quantity"]
+            else:
+                db.add(ResourceAllocation(festival_id=festival.id, resource_id=move["resource_id"], event_id=allocation.event_id, quantity=move["quantity"]))
+        if item["keep"]:
+            allocation.quantity = item["keep"]
+        else:
+            db.delete(allocation)
+    return f"{plan['units']} {lot.name} marked under repair; {len(plan['changes'])} events updated"
+
+
+# --- Scenario G: a vendor shuts down -------------------------------------------------------
+
+class VendorShutdown(BaseModel):
+    vendor_code: str
+
+
+def vendor_shutdown(db: Session, festival: Festival, change: VendorShutdown) -> Outcome:
+    fid = festival.id
+    vendor = by_code(db, Vendor, fid, change.vendor_code)
+    if vendor.status != "active":
+        raise SimulationError(f"{vendor.name} is already {vendor.status.replace('_', ' ')}")
+    vendors = list(db.scalars(select(Vendor).where(Vendor.festival_id == fid).order_by(Vendor.code)))
+    remaining = [v for v in vendors if v.id != vendor.id]
+    counts = diet_counts(db, fid)
+    before = {c["diet"]: c for c in coverage(vendors, counts, festival)}
+    after = {c["diet"]: c for c in coverage(remaining, counts, festival)}
+    hit = [d for d in before if before[d]["seats"] != after[d]["seats"]]
+    wiped = [d for d in hit if not after[d]["vendors"]]
+    served = can_serve(vendor, festival)
+    seats_before, seats_after = (sum(v.capacity or 0 for v in group if can_serve(v, festival)) for group in (vendors, remaining))
+    people = sum(counts.values())
+    terms = vendor.payment_terms or "not stated"
+    blocked = {d: [v.name for v in remaining if DIET_TAGS[d] in v.dietary_options and not can_serve(v, festival)] for d in hit}
+
+    def to_participants(_: set[Any]) -> Hop:
+        impacts = []
+        for d in hit:
+            a = after[d]
+            if not a["vendors"]:
+                fix = f"{blocked[d][0]} lists it, but its certificate has lapsed. Clear that or bring in a caterer." if blocked[d] else "Bring in a caterer for this diet."
+                impacts.append(Impact("participants", "critical", "fact", f"{a['people']:,} {d} participants have no compliant vendor left.", fix, d))
+            else:
+                severity = "high" if a["gap"] else "medium"
+                impacts.append(Impact("participants", severity, "fact", f"{d} seats fall from {before[d]['seats']:,} to {a['seats']:,} for {a['people']:,} people.", f"Ask {a['vendors'][0]} to add a sitting.", d))
+        codes = set(db.scalars(select(Participant.code).where(Participant.festival_id == fid, Participant.deleted_at.is_(None), Participant.dietary_needs.in_(hit)))) if hit else set()
+        return Hop(codes, impacts)
+
+    def to_finance(_: set[Any]) -> Hop:
+        return Hop({vendor.code}, [Impact("finance", "medium", "fact", f"{vendor.name} is paid on {terms}.", SETTLEMENT.get(vendor.payment_terms or "", "Agree the settlement before closing the account."), vendor.code)])
+
+    actions = [action(f"Replace {d} cover", f"{', '.join(blocked[d][:2])} list it but cannot serve yet." if blocked[d] else "No other vendor lists it.", "participants") for d in wiped]
+    actions += [action(f"Ask {after[d]['vendors'][0]} to add a sitting", f"{d} loses {before[d]['seats'] - after[d]['seats']:,} seats.", "participants") for d in hit if d not in wiped][:3]
+    actions.append(action(f"Settle with {vendor.name}", SETTLEMENT.get(vendor.payment_terms or "", f"Payment terms: {terms}."), "finance"))
+    lost = "It was not being counted, because its hygiene certificate lapsed." if not served else f"{vendor.capacity or 0:,} seats go."
+    return Outcome(
+        title=f"{vendor.name} shuts down",
+        headline=f"{lost} {plural(len(wiped), 'diet')} lose all cover and {plural(len(hit) - len(wiped), 'more')} lose seats.",
+        seed_module="vendors", seed_records={vendor.code},
+        seed_impacts=[Impact("vendors", "critical" if wiped else "high", "fact", f"{vendor.name} ({vendor.menu or 'menu not stated'}) stops serving. {lost}", record_ref=vendor.code)],
+        rules={("vendors", "participants"): to_participants, ("vendors", "finance"): to_finance},
+        current_state=[stat("Capacity", vendor.capacity or "Unknown"), stat("Diets listed", ", ".join(vendor.dietary_options) or "None"), stat("Hours", vendor.hours or "Unknown"), stat("Hygiene certificate", compliance(vendor, festival).replace("_", " ")), stat("Payment terms", terms)],
+        before_after=[change_row("Compliant seats per sitting", seats_before, seats_after), change_row("People to feed", people, people), *[change_row(f"{d} seats", before[d]["seats"], after[d]["seats"]) for d in hit]],
+        actions=actions,
+        assumptions=["Vendor capacity is read as seats at one sitting.", "The pack has no meal times and does not link participants to vendors, so coverage is by diet, not by meal.",
+                     f"{counts.get(None, 0):,} participants have a blank diet. They are counted as unknown, never as covered.", "Vendors with an expired or missing certificate are not counted."],
+        needs_reason=f"{plural(len(wiped), 'diet')} would have no compliant vendor." if wiped else None,
+        plan={"vendor_id": vendor.id},
+    )
+
+
+def apply_vendor_shutdown(db: Session, festival: Festival, plan: dict[str, Any]) -> str:
+    vendor = db.get(Vendor, plan["vendor_id"])
+    vendor.status = "shut_down"
+    return f"{vendor.name} shut down"
+
+
+# --- Scenario H: a contingent arrives late -------------------------------------------------
+
+class LateContingent(BaseModel):
+    contingent_code: str
+    minutes: int = Field(ge=1, le=4320)
+
+
+def late_contingent(db: Session, festival: Festival, change: LateContingent) -> Outcome:
+    fid = festival.id
+    contingent = by_code(db, Contingent, fid, change.contingent_code)
+    members = list(db.scalars(select(Participant).where(Participant.contingent_id == contingent.id, Participant.deleted_at.is_(None), Participant.registration_status != "cancelled").order_by(Participant.code)))
+    known = [p for p in members if p.arrival_at]
+    if not known:
+        raise SimulationError(f"{contingent.college} has no arrival times to move")
+    delay = timedelta(minutes=change.minutes)
+    late = {p.id: p.arrival_at + delay for p in known}
+    people = {p.id: p for p in known}
+    first_before, first_after = min(p.arrival_at for p in known), min(late.values())
+
+    def at_night(moment: datetime) -> bool:
+        hour = moment.astimezone(IST).hour
+        return hour >= LATE_NIGHT_HOUR or hour < EARLY_MORNING_HOUR
+
+    missed: Counter[str] = Counter()
+    names: dict[str, tuple[str, datetime]] = {}
+    for pid, e in db.execute(select(Registration.participant_id, Event).join(Event, Event.id == Registration.event_id).where(Registration.participant_id.in_(late), Event.deleted_at.is_(None), Event.start_at.is_not(None))):
+        if people[pid].arrival_at + TIGHT_GAP <= e.start_at < late[pid] + TIGHT_GAP:
+            missed[e.code] += 1
+            names[e.code] = (e.name, e.start_at)
+
+    stays = db.execute(select(AccommodationAllocation.participant_id, Hostel).join(Room, Room.id == AccommodationAllocation.room_id).join(Hostel, Hostel.id == Room.hostel_id).where(AccommodationAllocation.participant_id.in_(late), ACTIVE)).all()
+    night_arrivals = sum(at_night(t) for t in late.values())
+    gone = sum(1 for p in known if p.departure_at and late[p.id] > p.departure_at)
+    saving = Decimal(0)
+    for pid, hostel in stays:
+        if hostel.kind == "external":
+            stay = to_person(people[pid], {})
+            saving += (hostel.cost_per_bed_night or Decimal(0)) * ((nights(stay) or 0) - (nights(replace(stay, arrival=late[pid])) or 0))
+
+    trips: Counter[str] = Counter()
+    for pid, route in db.execute(select(TransportAssignment.participant_id, Route).join(Route, Route.id == TransportAssignment.route_id).where(TransportAssignment.participant_id.in_(late))):
+        if people[pid].arrival_at <= route.departure_at < late[pid]:
+            trips[route.code] += 1
+
+    def to_events(_: set[Any]) -> Hop:
+        impacts = [Impact("events", "high", "fact", f"{plural(count, 'member')} will miss the start of {names[code][0]} at {ist(names[code][1])}.", "Ask the coordinator to hold a place or move their slot.", code) for code, count in missed.most_common(8)]
+        return Hop(set(missed), impacts)
+
+    def to_accommodation(_: set[Any]) -> Hop:
+        if not stays:
+            return Hop()
+        staff = on_shift(db, fid, "Hospitality", first_after)
+        severity = "high" if night_arrivals and not staff else "medium" if night_arrivals else "low"
+        return Hop({"check-in"}, [Impact("accommodation", severity, "fact", f"{plural(len(stays), 'member')} with rooms check in from {ist(first_after)}, {night_arrivals:,} at night. {plural(staff, 'Hospitality team member')} on shift then.",
+                                         "Hold their rooms and keep a check-in desk open." if night_arrivals else "Hold their rooms.", contingent.code)])
+
+    def to_finance(_: set[Any]) -> Hop:
+        if not saving:
+            return Hop()
+        return Hop({"Hospitality"}, [Impact("finance", "low", "estimate", f"Shorter stays could cut external cost by {inr(saving)}, if the property agrees.", "Confirm whether late arrival nights are still charged.", "Hospitality")])
+
+    def to_transport(_: set[Any]) -> Hop:
+        impacts = [Impact("transportation", "high", "fact", f"{plural(count, 'member')} will miss {code}.", "Move them to a later trip.", code) for code, count in trips.most_common()]
+        return Hop(set(trips), impacts)
+
+    def to_desk(_: set[Any]) -> Hop:
+        staff = on_shift(db, fid, "Registration", first_after)
+        return Hop({"registration desk"}, [Impact("volunteers", "high" if not staff else "low", "fact", f"{plural(staff, 'Registration Desk member')} on shift when they arrive.", "Move a volunteer to the desk." if not staff else None, contingent.code)])
+
+    seed = [Impact("participants", "high", "fact", f"{plural(len(known), 'member')} of {contingent.college} arrive {change.minutes} minutes later.", "Tell the contingent leader and escort.", contingent.code)]
+    if len(members) > len(known):
+        seed.append(Impact("participants", "medium", "fact", f"{plural(len(members) - len(known), 'member')} have no arrival time, so the effect on them is unknown.", "Ask the contingent leader to confirm.", contingent.code))
+    if gone:
+        seed.append(Impact("participants", "critical", "fact", f"{plural(gone, 'member')} would arrive after they were due to leave.", "Confirm whether they are still coming.", contingent.code))
+    worst = missed.most_common(1)
+    actions = [action(f"Hold places at {names[worst[0][0]][0]}", f"{plural(worst[0][1], 'member')} miss the start.", "events")] if worst else []
+    if trips:
+        actions.append(action("Move riders to a later trip", f"{plural(sum(trips.values()), 'member')} miss booked trips.", "transportation"))
+    actions.append(action(f"Call {contingent.leader or 'the contingent leader'}", f"Escort: {contingent.escort or 'not stated'}. Confirm the new arrival time.", "participants"))
+    return Outcome(
+        title=f"{contingent.college} delayed by {change.minutes} minutes",
+        headline=f"{plural(len(known), 'member')} arrive late, {plural(len(missed), 'event')} lose people and {plural(sum(trips.values()), 'booked ride')} are missed.",
+        seed_module="participants", seed_records={p.code for p in known}, seed_impacts=seed,
+        rules={("participants", "events"): to_events, ("participants", "accommodation"): to_accommodation, ("accommodation", "finance"): to_finance, ("participants", "transportation"): to_transport, ("participants", "volunteers"): to_desk},
+        current_state=[stat("Contingent", contingent.code), stat("Members", len(members)), stat("Leader", contingent.leader or "Unknown"), stat("Escort", contingent.escort or "Unknown"), stat("First arrival", ist(first_before)), stat("With rooms", len(stays))],
+        before_after=[change_row("First arrival", ist(first_before), ist(first_after)), change_row("Event starts missed", 0, sum(missed.values())), change_row("Booked rides missed", 0, sum(trips.values())), change_row("Night arrivals", sum(at_night(p.arrival_at) for p in known), night_arrivals)],
+        actions=actions,
+        assumptions=["Everyone with an arrival time is delayed by the same amount.", "People need 30 minutes from arrival to reach an event.", f"Arrivals from {LATE_NIGHT_HOUR}:00 to {EARLY_MORNING_HOUR}:00 count as night arrivals."],
+        scheduling=[f"First arrival moves to {ist(first_after)}"], budget_impact=-float(saving),
+        needs_reason=f"{plural(gone, 'member')} would arrive after leaving." if gone else None,
+        plan={"arrivals": {str(pid): moment.isoformat() for pid, moment in late.items()}, "contingent": contingent.college},
+    )
+
+
+def apply_late_contingent(db: Session, festival: Festival, plan: dict[str, Any]) -> str:
+    for pid, moment in plan["arrivals"].items():
+        db.get(Participant, int(pid)).arrival_at = datetime.fromisoformat(moment)
+    return f"{plan['contingent']} arrival times updated for {len(plan['arrivals']):,} members"
+
+
 @dataclass(frozen=True)
 class Scenario:
     label: str
@@ -744,4 +1012,7 @@ SCENARIOS = {
     "bus_delay": Scenario("Bus is delayed", DelayChange, bus_delay, apply_bus_delay),
     "volunteers_unavailable": Scenario("Volunteers become unavailable", VolunteerChange, volunteers_unavailable, apply_volunteers_unavailable),
     "budget_reduction": Scenario("Budget is reduced", BudgetChange, budget_reduction, apply_budget_reduction),
+    "equipment_failure": Scenario("Equipment fails", EquipmentFailure, equipment_failure, apply_equipment_failure),
+    "vendor_shutdown": Scenario("Vendor shuts down", VendorShutdown, vendor_shutdown, apply_vendor_shutdown),
+    "late_contingent": Scenario("Contingent arrives late", LateContingent, late_contingent, apply_late_contingent),
 }

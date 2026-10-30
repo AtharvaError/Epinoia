@@ -12,6 +12,7 @@ from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import Event, Festival, Registration, Resource, ResourceAllocation, Role, User, Venue, Volunteer, VolunteerShift
 from app.services.audit import record
+from app.services.equipment import double_bookings, equipment_gaps
 from app.services.events import all_conflicts, outside_venue_hours, venue_conflicts
 
 router = APIRouter(prefix="/api/festivals/{festival_id}/events", tags=["events"])
@@ -82,7 +83,7 @@ def list_events(page: int = Query(1, ge=1), q: str | None = Query(None, max_leng
 
 @router.get("/conflicts", dependencies=[Depends(require("events.read"))])
 def conflicts(festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
-    return all_conflicts(db, festival.id)
+    return {**all_conflicts(db, festival.id), "equipment": equipment_gaps(db, festival.id), "double_booked": double_bookings(db, festival.id)}
 
 
 @router.get("/schedule", dependencies=[Depends(require("events.read"))])
