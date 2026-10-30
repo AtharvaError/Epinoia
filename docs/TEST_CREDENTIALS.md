@@ -48,15 +48,15 @@ npm run demo
 
 ## Test
 
-Run from `backend/` on freshly seeded data, using `--reset` below. Some tests expect
-that no beds are allocated yet. Tests also change demo data, so reseed again before
-a demo:
+Run from `backend/`. Tests use their own `festos_test` database, rebuilt on every run,
+so demo data is never touched. PostgreSQL must be running.
 
 ```bash
 .venv/Scripts/python -m pytest -q
 ```
 
-To reload all data from scratch, which deletes everything in the database:
+To reload all data from scratch, which deletes everything in the database. The seed
+includes the sample allocation plan, so beds are already allocated:
 
 ```bash
 .venv/Scripts/python -m scripts.seed --reset

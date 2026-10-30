@@ -76,18 +76,28 @@ behind `participants.read_sensitive`.
 `audit_logs` is append-only, enforced by a database trigger that rejects UPDATE
 and DELETE. The dashboard feed reads from this table.
 
-## Ripple Simulator (Phase 3)
+## Ripple Simulator
 
-Dependency graph:
-Participants, Events, Venues, Volunteers, Transportation, Accommodation, Finance.
+Code lives in `backend/app/simulation/`.
 
-- **Preview** reads current state, traverses structured relationships, and stores
-  a report in `simulations` and `simulation_impacts`. Production rows are not
-  touched. The report stores a hash of the state it read.
-- **Commit** requires `simulation.approve`, recomputes that hash, refuses if the
-  data has moved on, then applies the change in one transaction with audit rows
-  and notifications.
-- Every impact is marked as a verified fact or an estimate.
+- `graph.py` defines seven modules and the relationships between them, and walks
+  them breadth first. It knows nothing about festivals. A record's depth says how
+  far an effect travelled: depth 1 is direct, deeper is indirect. Each relationship
+  fires once, so cycles end.
+- `scenarios.py` holds the five scenarios. Each supplies one rule per relationship,
+  and each rule queries real rows. The hostel scenario reuses the real allocator.
+  No model is involved at any point.
+- `engine.py` runs the two-phase workflow:
+  - **Preview** computes a report and stores it in `simulations` and
+    `simulation_impacts`. No production row changes. The report's hash is saved.
+  - **Commit** needs `simulation.approve`. In a serializable transaction it
+    recomputes the report and refuses if the hash differs, so any data change that
+    would alter the outcome blocks it and any change that would not does not. It
+    then applies the plan, writes audit rows and sends notifications together. A
+    failure at any step rolls everything back.
+
+Roles without `simulation.approve` can simulate and request approval.
+Every impact is marked as a verified fact or an estimate.
 
 ## Phases
 

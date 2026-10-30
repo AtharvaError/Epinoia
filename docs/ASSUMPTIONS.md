@@ -19,5 +19,10 @@ Keep this current — the brief rewards stated assumptions and preserved uncerta
 | 13 | External stays are used cheapest first, only if transport is not ruled out, and stop at the limit. The default limit is the simulated Hospitality budget of ₹9L | brief rule 7 | the real budget changes how many people are placed |
 | 14 | Minors get campus beds first. Any minor sent off campus is marked for review | safety, brief rule 6 | supervision needs may differ |
 | 15 | Passengers need 30 minutes from drop-off to reach an event | no travel data in the pack | affected event lists could be longer or shorter |
+| 16 | One helper per 40 people moved between hostels | no staffing data for moves | helper estimate could be off |
+| 17 | Events before 09:00 or ending after 21:00 are hard for people staying off campus | brief rule 6 | early and late risks could be over or under-reported |
+| 18 | A gap under 30 minutes between events is tight. The pack has no distances between venues | no distance data | transfer risk is only indicative |
+| 19 | A festival-wide budget cut is shared in proportion to each department's budget | simplest fair split | the real cut may be targeted |
+| 20 | Simulating a hostel closure only rehouses people from that hostel, not those already waiting for a bed | keeps one decision about one change | waiting participants may have a stronger claim on free beds |
 
 > Add a row whenever a decision depends on something the data does not state outright.

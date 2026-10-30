@@ -105,5 +105,5 @@ export interface SearchResult {
 
 export interface Notifications {
   unread: number;
-  items: { id: number; title: string; body: string | null; read: boolean; created_at: string }[];
+  items: { id: number; title: string; body: string | null; link: string | null; read: boolean; created_at: string }[];
 }

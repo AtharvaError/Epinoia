@@ -18,7 +18,7 @@ interface PlanSummary {
   people: number; placed: number; held: number; on_campus: number; external: number; external_cost: number; contingents_split: number;
   held_reasons: { reason: string; count: number }[]; relaxed: { constraint: string; count: number }[]; splits: { group: string; locations: number }[];
 }
-interface Plan { summary: PlanSummary; state_hash: string; budget_limit: string | null; approved_budget: string | null; over_approved_budget: boolean }
+interface Plan { summary: PlanSummary; state_hash: string; budget_limit: string | null; approved_budget: string | null; already_committed: string; over_approved_budget: boolean }
 interface RoomRow { code: string; hostel: string; floor: number | null; gender_policy: string | null; capacity: number; occupied: number; available: number; accessible: boolean | null; status: string }
 interface AllocationRow { id: number; participant: string; name: string; room: string; status: string; check_in_at: string | null; check_out_at: string | null; relaxed_constraints: string[]; override_reason: string | null }
 interface Unallocated { code: string; name: string; college: string; gender: string | null; accessibility: string | null; restricted: boolean }
@@ -56,7 +56,7 @@ function PlanPanel({ summary }: { summary: Summary }) {
             <div><span>Placed</span><strong>{formatNumber(s.placed)}</strong><small>of {formatNumber(s.people)}</small></div>
             <div><span>On campus</span><strong>{formatNumber(s.on_campus)}</strong></div>
             <div><span>External</span><strong>{formatNumber(s.external)}</strong></div>
-            <div><span>External cost</span><strong>{formatMoney(s.external_cost)}</strong></div>
+            <div><span>External cost</span><strong>{formatMoney(s.external_cost)}</strong><small>{formatMoney(plan.already_committed)} already committed</small></div>
             <div><span>Held</span><strong className={s.held ? "over-text" : ""}>{formatNumber(s.held)}</strong></div>
             <div><span>Contingents split</span><strong>{s.contingents_split}</strong></div>
           </div>

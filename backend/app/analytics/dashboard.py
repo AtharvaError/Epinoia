@@ -38,7 +38,7 @@ EVENT_LOAD = """
     FROM events e
     LEFT JOIN venues v ON v.id=e.venue_id
     LEFT JOIN registrations r ON r.event_id=e.id
-    LEFT JOIN volunteer_shifts s ON s.event_id=e.id
+    LEFT JOIN volunteer_shifts s ON s.event_id=e.id AND s.status<>'cancelled'
     WHERE e.festival_id=:f AND e.deleted_at IS NULL
     GROUP BY e.id, v.id"""
 CLASHES = """

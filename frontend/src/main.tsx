@@ -14,6 +14,7 @@ import { CommandCenter } from "./pages/CommandCenter";
 import { Events } from "./pages/Events";
 import { Login } from "./pages/Login";
 import { Participants } from "./pages/Participants";
+import { Ripple } from "./pages/Ripple";
 import { Transport } from "./pages/Transport";
 import { Venues } from "./pages/Venues";
 import { Volunteers } from "./pages/Volunteers";
@@ -43,6 +44,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="transportation" element={<Transport />} />
             <Route path="volunteers" element={<Volunteers />} />
             <Route path="venues" element={<Venues />} />
+            <Route path="ripple" element={<Ripple />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -11,14 +11,14 @@ from sqlalchemy.orm import Session
 from app.api.common import by_code, like, paged
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
-from app.models import (
-    AccommodationAllocation, Budget, Contingent, Department, Festival, Hostel, Participant, Room, User,
-)
+from app.models import AccommodationAllocation, Festival, Hostel, Participant, Room, User
 from app.services.allocator import Beds, Person, housing_group, plan_allocation, suits_access, summarize
 from app.services.audit import record
+from app.services.housing import (
+    ACTIVE, contingent_codes, external_commitment, hospitality_budget, occupied_counts, open_rooms, to_person, unallocated_query,
+)
 
 router = APIRouter(prefix="/api/festivals/{festival_id}/accommodation", tags=["accommodation"])
-ACTIVE = AccommodationAllocation.status != "cancelled"
 
 
 class HostelIn(BaseModel):
@@ -53,22 +53,6 @@ class PlanIn(BaseModel):
 class ApplyIn(PlanIn):
     state_hash: str
     reason: str | None = Field(default=None, max_length=500)
-
-
-def occupied_counts(db: Session, festival_id: int) -> dict[int, int]:
-    return dict(db.execute(select(AccommodationAllocation.room_id, func.count()).where(
-        AccommodationAllocation.festival_id == festival_id, ACTIVE).group_by(AccommodationAllocation.room_id)).all())
-
-
-def unallocated_query(festival_id: int):
-    allocated = select(AccommodationAllocation.participant_id).where(AccommodationAllocation.festival_id == festival_id, ACTIVE)
-    return select(Participant).where(Participant.festival_id == festival_id, Participant.deleted_at.is_(None),
-                                     Participant.accommodation_required.is_(True), Participant.id.not_in(allocated))
-
-
-def hospitality_budget(db: Session, festival_id: int) -> Decimal | None:
-    return db.scalar(select(Budget.approved_amount).join(Department, Department.id == Budget.department_id)
-                     .where(Budget.festival_id == festival_id, Department.name == "Hospitality"))
 
 
 @router.get("/summary", dependencies=[Depends(require("accommodation.read"))])
@@ -166,18 +150,6 @@ def unallocated(page: int = Query(1, ge=1), festival: Festival = Depends(festiva
         "accessibility": p.accessibility_needs if sensitive else None, "restricted": not sensitive})
 
 
-def to_person(p: Participant, contingents: dict[int, str]) -> Person:
-    return Person(p.id, p.code, contingents.get(p.contingent_id, "none"), p.gender_as_given, p.accessibility_needs, p.age, p.arrival_at, p.departure_at)
-
-
-def open_rooms(db: Session, festival_id: int) -> list[Beds]:
-    occupied = occupied_counts(db, festival_id)
-    rows = db.execute(select(Room, Hostel).join(Hostel, Hostel.id == Room.hostel_id).where(
-        Room.festival_id == festival_id, Room.status == "available", Hostel.status == "available"))
-    return [Beds(r.id, r.code, h.name, h.kind, r.floor, r.gender_policy, r.accessible, max(0, r.capacity - occupied.get(r.id, 0)),
-                 h.cost_per_bed_night, h.transport_available, h.distance_km) for r, h in rows]
-
-
 def state_hash(people: list[Person], rooms: list[Beds]) -> str:
     """Changes whenever a person or a free bed changes, so a stale preview cannot be applied."""
     parts = sorted(f"{p.code}:{p.gender}:{p.accessibility}" for p in people) + sorted(f"{r.code}:{r.free}" for r in rooms)
@@ -185,10 +157,12 @@ def state_hash(people: list[Person], rooms: list[Beds]) -> str:
 
 
 def build_plan(db: Session, festival: Festival, limit: Decimal | None):
-    contingents = dict(db.execute(select(Contingent.id, Contingent.code).where(Contingent.festival_id == festival.id)).all())
-    people = [to_person(p, contingents) for p in db.scalars(unallocated_query(festival.id))]
+    contingents = contingent_codes(db, festival.id)
+    people = [to_person(p, contingents) for p in db.scalars(unallocated_query(festival.id).order_by(Participant.code))]
     rooms = open_rooms(db, festival.id)
-    return people, rooms, plan_allocation(people, rooms, limit), state_hash(people, rooms)
+    # The limit covers all external stays, so only what is left of it can be spent here.
+    remaining = None if limit is None else max(Decimal(0), limit - external_commitment(db, festival.id))
+    return people, rooms, plan_allocation(people, rooms, remaining), state_hash(people, rooms)
 
 
 def effective_limit(db: Session, festival: Festival, requested: Decimal | None) -> Decimal | None:
@@ -201,6 +175,7 @@ def preview_plan(body: PlanIn, festival: Festival = Depends(festival_access), db
     people, _, plan, hash_value = build_plan(db, festival, limit)
     approved = hospitality_budget(db, festival.id)
     return {"summary": summarize(plan, len(people)), "state_hash": hash_value, "budget_limit": limit, "approved_budget": approved,
+            "already_committed": external_commitment(db, festival.id),
             "over_approved_budget": bool(approved is not None and limit is not None and limit > approved)}
 
 

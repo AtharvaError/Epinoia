@@ -3,12 +3,12 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api import accommodation, auth, events, festivals, participants, transport, venues, volunteers
+from app.api import accommodation, auth, events, festivals, participants, simulations, transport, venues, volunteers
 
 logger = logging.getLogger("festos")
 
 app = FastAPI(title="FestOS Command API", docs_url="/api/docs", openapi_url="/api/openapi.json")
-for module in (auth, festivals, participants, events, venues, accommodation, transport, volunteers):
+for module in (auth, festivals, participants, events, venues, accommodation, transport, volunteers, simulations):
     app.include_router(module.router)
 
 

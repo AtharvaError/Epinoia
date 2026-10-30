@@ -11,6 +11,7 @@ from app.auth.permissions import ALL, ROLES
 from app.config import settings
 from app.database import Base, SessionLocal
 from app.models import Festival, Permission, Role
+from app.services.housing import apply_sample_plan
 from app.services.pack_import import load_pack
 from app.services.simulated_data import load_simulated
 
@@ -23,11 +24,11 @@ def seed_roles(db) -> None:
     db.flush()
 
 
-def main() -> None:
+def seed(reset: bool = False) -> None:
     if not settings.demo_password:
         raise SystemExit("Set DEMO_PASSWORD in .env first")
     with SessionLocal() as db:
-        if "--reset" in sys.argv:
+        if reset:
             if settings.environment == "production":
                 raise SystemExit("--reset is disabled in production")
             tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
@@ -37,9 +38,11 @@ def main() -> None:
         seed_roles(db)
         festival = load_pack(db)
         load_simulated(db, festival.id)
+        db.flush()
+        apply_sample_plan(db, festival)
         db.commit()
     print("Seed complete")
 
 
 if __name__ == "__main__":
-    main()
+    seed(reset="--reset" in sys.argv)

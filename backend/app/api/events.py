@@ -45,7 +45,7 @@ class EventIn(BaseModel):
 
 def load(db: Session, festival_id: int) -> dict[int, dict[str, int]]:
     registered = dict(db.execute(select(Registration.event_id, func.count()).where(Registration.festival_id == festival_id).group_by(Registration.event_id)).all())
-    staffed = dict(db.execute(select(VolunteerShift.event_id, func.count()).where(VolunteerShift.festival_id == festival_id).group_by(VolunteerShift.event_id)).all())
+    staffed = dict(db.execute(select(VolunteerShift.event_id, func.count()).where(VolunteerShift.festival_id == festival_id, VolunteerShift.status != "cancelled").group_by(VolunteerShift.event_id)).all())
     return {"registered": registered, "staffed": staffed}
 
 
@@ -106,7 +106,7 @@ def get_event(code: str, festival: Festival = Depends(festival_access), db: Sess
     row["clashing_venue_events"] = [] if not (e.venue_id and e.start_at) else [
         {"code": c.code, "name": c.name} for c in venue_conflicts(db, festival.id, e.venue_id, e.start_at, e.end_at, e.id)]
     row["shifts"] = [{"volunteer": v.name, "code": v.code, "task": s.task, "attendance": s.attendance} for s, v in db.execute(
-        select(VolunteerShift, Volunteer).join(Volunteer, Volunteer.id == VolunteerShift.volunteer_id).where(VolunteerShift.event_id == e.id).order_by(Volunteer.name))]
+        select(VolunteerShift, Volunteer).join(Volunteer, Volunteer.id == VolunteerShift.volunteer_id).where(VolunteerShift.event_id == e.id, VolunteerShift.status != "cancelled").order_by(Volunteer.name))]
     row["resources"] = [{"code": r.code, "name": r.name, "quantity": a.quantity} for a, r in db.execute(
         select(ResourceAllocation, Resource).join(Resource, Resource.id == ResourceAllocation.resource_id).where(ResourceAllocation.event_id == e.id))]
     return row

@@ -161,8 +161,10 @@ def test_kpis_follow_the_database(admin, fest, data):
 
 def test_unallocated_alert_matches_pack(data):
     wanted = sum(1 for r in pack("participants.csv") if r["accommodation_requested"] == "yes")
+    with SessionLocal() as db:
+        housed = db.execute(text("SELECT count(*) FROM accommodation_allocations WHERE status<>'cancelled'")).scalar_one()
     alert = next(a for a in data["alerts"] if a["module"] == "Accommodation" and "bed allocated" in a["title"])
-    assert f"{wanted:,}" in alert["title"]
+    assert f"{wanted - housed:,}" in alert["title"]
 
 
 def test_schedule_has_no_double_booked_venue_and_fits_venue_hours():

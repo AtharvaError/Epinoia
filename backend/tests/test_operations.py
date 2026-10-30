@@ -116,8 +116,9 @@ def test_room_manual_allocation_enforces_hard_rules(admin, base):
     with SessionLocal() as db:
         code = db.execute(text("""SELECT p.code FROM participants p WHERE p.gender_as_given='Male' AND p.accessibility_needs='None' AND p.accommodation_required
             AND NOT EXISTS (SELECT 1 FROM accommodation_allocations a WHERE a.participant_id=p.id AND a.status<>'cancelled') LIMIT 1""")).scalar_one()
-        girls_room = db.execute(text("SELECT code FROM rooms WHERE gender_policy='girls' LIMIT 1")).scalar_one()
-        boys_room = db.execute(text("SELECT code FROM rooms WHERE gender_policy='boys' AND accessible IS NOT TRUE LIMIT 1")).scalar_one()
+    girls_room, boys_room = "TESTG1", "TESTB1"
+    for room, policy in ((girls_room, "girls"), (boys_room, "boys")):
+        assert admin.post(f"{base}/accommodation/rooms", json={"hostel_code": "B1", "code": room, "floor": 1, "gender_policy": policy, "capacity": 1, "accessible": False}).status_code == 201
     refused = admin.post(f"{base}/accommodation/allocate", json={"participant_code": code, "room_code": girls_room})
     assert refused.status_code == 409 and refused.json()["detail"]["conflicts"]
     assert admin.post(f"{base}/accommodation/allocate", json={"participant_code": code, "room_code": boys_room}).status_code == 201
@@ -132,14 +133,21 @@ def test_room_manual_allocation_enforces_hard_rules(admin, base):
 def test_plan_preview_writes_nothing_and_stale_preview_is_refused(admin, base):
     with SessionLocal() as db:
         before = db.execute(text("SELECT count(*) FROM accommodation_allocations WHERE status<>'cancelled'")).scalar_one()
-    preview = admin.post(f"{base}/accommodation/plan", json={}).json()
+    preview = admin.post(f"{base}/accommodation/plan", json={"budget_limit": 99999999}).json()
     with SessionLocal() as db:
         assert db.execute(text("SELECT count(*) FROM accommodation_allocations WHERE status<>'cancelled'")).scalar_one() == before
     assert preview["summary"]["placed"] > 0
     assert preview["summary"]["placed"] + preview["summary"]["held"] == preview["summary"]["people"]
-    assert preview["summary"]["external_cost"] <= float(preview["budget_limit"])
     stale = admin.post(f"{base}/accommodation/plan/apply", json={"state_hash": "stale"})
     assert stale.status_code == 409
+
+
+def test_a_second_plan_cannot_respend_the_budget(admin, base):
+    """The seed plan already used the budget, so a new plan may only spend what is left."""
+    preview = admin.post(f"{base}/accommodation/plan", json={}).json()
+    left = float(preview["approved_budget"]) - float(preview["already_committed"])
+    assert float(preview["already_committed"]) > 0
+    assert preview["summary"]["external_cost"] <= left
 
 
 def test_going_over_budget_needs_permission_and_reason(admin, base):
@@ -182,6 +190,17 @@ def test_shift_overlap_is_refused(admin, base):
     with SessionLocal() as db:
         db.execute(text("DELETE FROM volunteers WHERE code=:c"), {"c": created})
         db.commit()
+
+
+def test_cancelled_shifts_do_not_count_as_staffed(admin, base):
+    event = admin.get(f"{base}/events").json()["items"][0]
+    with SessionLocal() as db:
+        shift = db.execute(text("""SELECT s.id FROM volunteer_shifts s JOIN events e ON e.id=s.event_id
+                                   WHERE e.code=:c AND s.status<>'cancelled' LIMIT 1"""), {"c": event["code"]}).scalar_one()
+    assert admin.patch(f"{base}/shifts/{shift}", json={"status": "cancelled"}).status_code == 200
+    assert scheduled(admin, base, event["code"])["staffed"] == event["staffed"] - 1
+    dashboard = admin.get(f"{base}/dashboard").json()
+    assert dashboard["kpis"]
 
 
 def test_replacements_are_free_during_the_event(admin, base):

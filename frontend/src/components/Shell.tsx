@@ -29,7 +29,7 @@ const NAV: NavItem[] = [
   { label: "Finance", icon: Wallet, permission: "finance.read", phase: 4 },
   { label: "Communication", icon: Megaphone, permission: "communication.read", phase: 4 },
   { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", phase: 4 },
-  { label: "Ripple Simulator", icon: Activity, permission: "simulation.run", phase: 3 },
+  { label: "Ripple Simulator", icon: Activity, permission: "simulation.run", to: "/ripple" },
   { label: "Analytics & Reports", icon: BarChart3, permission: "analytics.read", phase: 4 },
   { label: "Settings", icon: Settings, permission: "settings.manage", phase: 5 },
 ];
@@ -119,6 +119,13 @@ function usePopover() {
 
 function NotificationCenter({ festivalId }: { festivalId: number }) {
   const { open, setOpen, ref } = usePopover();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const visit = (note: Notifications["items"][number]) => {
+    setOpen(false);
+    if (note.link) navigate(note.link);
+    if (!note.read) api(`/api/festivals/${festivalId}/notifications/${note.id}/read`, { method: "POST" }).then(() => queryClient.invalidateQueries({ queryKey: ["notifications", festivalId] }));
+  };
   const notes = useQuery({
     queryKey: ["notifications", festivalId],
     queryFn: () => api<Notifications>(`/api/festivals/${festivalId}/notifications`),
@@ -137,7 +144,7 @@ function NotificationCenter({ festivalId }: { festivalId: number }) {
           {notes.isError && <p className="form-error">{notes.error.message}</p>}
           {notes.data?.items.length === 0 && <p className="muted small">Nothing yet. Operational changes that affect you will appear here.</p>}
           {notes.data?.items.map((n) => (
-            <div key={n.id} className="note"><strong>{n.title}</strong>{n.body && <p>{n.body}</p>}<small>{formatTime(n.created_at)}</small></div>
+            <button key={n.id} className={n.read ? "note" : "note unread"} onClick={() => visit(n)}><strong>{n.title}</strong>{n.body && <p>{n.body}</p>}<small>{formatTime(n.created_at)}</small></button>
           ))}
         </div>
       )}
@@ -201,11 +208,11 @@ export function Shell({ user }: { user: User }) {
         <nav aria-label="Main">
           {allowed.map(({ label, icon: Icon, to, phase }) =>
             to ? (
-              <NavLink key={label} to={to} end className="nav-item" title={label} onClick={() => setDrawer(false)}>
+              <NavLink key={label} to={to} end className={`nav-item ${label === "Ripple Simulator" ? "signature" : ""}`} title={label} onClick={() => setDrawer(false)}>
                 <Icon size={18} aria-hidden="true" /><span className="nav-text">{label}</span>
               </NavLink>
             ) : (
-              <span key={label} className={`nav-item disabled ${label === "Ripple Simulator" ? "signature" : ""}`} aria-disabled="true" title={`${label} arrives in Phase ${phase}`}>
+              <span key={label} className="nav-item disabled" aria-disabled="true" title={`${label} arrives in Phase ${phase}`}>
                 <Icon size={18} aria-hidden="true" /><span className="nav-text">{label}</span><span className="nav-phase">P{phase}</span>
               </span>
             ),
