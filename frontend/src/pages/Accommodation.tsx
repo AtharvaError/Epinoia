@@ -252,7 +252,7 @@ export function Accommodation() {
 
   return (
     <div>
-      <PageHead title="Accommodation" subtitle="Beds, rooms and the allocation plan">
+      <PageHead title="Stays" subtitle="Beds, rooms and the allocation plan">
         {write && <><button className="button-ghost" onClick={() => setAdding("room")}><Plus size={16} /> Add room</button><button className="button-ghost" onClick={() => setAdding("hostel")}><Plus size={16} /> Add hostel</button></>}
       </PageHead>
       <QueryState query={summary}>

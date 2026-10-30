@@ -123,7 +123,7 @@ export function Venues() {
   const venue = venues.data?.find((v) => v.code === selected);
   return (
     <div>
-      <PageHead title="Venues & Resources" subtitle="Availability is computed from condition and reservations">
+      <PageHead title="Venues and kit" subtitle="Availability is computed from condition and reservations">
         {can("venues.write") && (tab === "venues"
           ? <button className="button-primary small" onClick={() => setAddVenue(true)}><Plus size={16} /> Add venue</button>
           : <button className="button-primary small" onClick={() => setResource("new")}><Plus size={16} /> Add resource</button>)}

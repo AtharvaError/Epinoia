@@ -26,6 +26,8 @@ interface Conflicts {
   venue: { first_name: string; second_name: string; venue: string }[];
   participants: { first_code: string; first_name: string; second_code: string; second_name: string; people: number }[];
   capacity: { code: string; name: string; venue: string; capacity: number; registered: number }[];
+  equipment: { code: string; name: string; item: string; needed: number; allocated: number }[];
+  double_booked: { code: string; item: string; location: string | null; event: string; quantity: number }[];
 }
 interface Schedule { venues: { code: string; name: string; capacity: number }[]; events: EventRow[] }
 
@@ -218,6 +220,12 @@ function ConflictList({ onOpen }: { onOpen: (code: string) => void }) {
           <section className="panel"><header><h2>Over capacity</h2><span className="muted small">{data.capacity.length}</span></header>
             <ul className="stack scroll">{data.capacity.map((c) => <li key={c.code}><button className="link" onClick={() => onOpen(c.code)}>{c.name}</button><span className="muted small">{c.registered} for {c.capacity} at {c.venue}</span></li>)}</ul>
           </section>
+          <section className="panel"><header><h2>Equipment gaps</h2><span className="muted small">{data.equipment.length}</span></header>
+            {data.equipment.length ? <ul className="stack scroll">{data.equipment.map((g) => <li key={g.code + g.item}><button className="link" onClick={() => onOpen(g.code)}>{g.name}</button><span className="muted small">{g.allocated} of {g.needed} {g.item}</span></li>)}</ul> : <p className="muted small">Every event has the equipment it asked for.</p>}
+          </section>
+          <section className="panel"><header><h2>Equipment double-booked</h2><span className="muted small">{data.double_booked.length}</span></header>
+            {data.double_booked.length ? <ul className="stack scroll">{data.double_booked.map((d) => <li key={d.code + d.event}><span>{d.item} at {d.location}</span><span className="muted small">{d.event}</span></li>)}</ul> : <p className="muted small">No lot is promised to two events at once.</p>}
+          </section>
           <section className="panel wide"><header><h2>Participant clashes</h2><span className="muted small">{data.participants.length} event pairs</span></header>
             <ul className="stack scroll">{data.participants.map((p) => <li key={p.first_code + p.second_code}><span><button className="link" onClick={() => onOpen(p.first_code)}>{p.first_name}</button> and <button className="link" onClick={() => onOpen(p.second_code)}>{p.second_name}</button></span><span className="muted small">{p.people} people</span></li>)}</ul>
           </section>
@@ -255,7 +263,7 @@ export function Events() {
   const opened = params.get("open");
   return (
     <div>
-      <PageHead title="Events & Schedule" subtitle="The pack has no times, so the schedule is generated and can be changed">
+      <PageHead title="Schedule" subtitle="The pack has no times, so the schedule is generated and can be changed">
         {can("events.write") && <button className="button-primary small" onClick={() => setAdding(true)}><CalendarPlus size={16} /> Add event</button>}
       </PageHead>
       <Tabs value={tab} onChange={setTab} options={[["list", "All events"], ["schedule", "Daily schedule"], ["conflicts", "Conflicts"]]} />

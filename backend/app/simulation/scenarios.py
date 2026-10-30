@@ -791,12 +791,12 @@ def equipment_failure(db: Session, festival: Festival, change: EquipmentFailure)
 
     actions = [action(f"Replace at {o['event'].name}", ", ".join(f"{m['quantity']} from {m['location']}" for m in o["moves"]), "venues") for o in changed if o["moves"]][:4]
     if stranded:
-        actions.append(action(f"Hire {sum(o['short'] for o in stranded)} {lot.name}", f"No working spare is free for {', '.join(o['event'].name for o in stranded[:3])}.", "venues"))
+        actions.append(action(f"Hire {plural(sum(o['short'] for o in stranded), lot.name)}", f"No working spare is free for {', '.join(o['event'].name for o in stranded[:3])}.", "venues"))
     return Outcome(
-        title=f"{change.units} {lot.name} fail at {lot.location}",
+        title=f"{plural(change.units, lot.name)} failed at {lot.location}",
         headline=f"{plural(len(changed), 'event')} affected. {len(changed) - len(stranded)} can be covered from spares and {len(stranded)} cannot." if changed else "No event depends on these units, so nothing else changes.",
         seed_module="venues", seed_records={lot.code},
-        seed_impacts=[Impact("venues", "high" if changed else "low", "fact", f"{change.units} of {lot.quantity} {lot.name} at {lot.location} stop working.", "They move to under repair when this is applied.", lot.code)],
+        seed_impacts=[Impact("venues", "high" if changed else "low", "fact", f"{change.units} of {plural(lot.quantity, lot.name)} at {lot.location} stopped working.", "They move to under repair when this is applied.", lot.code)],
         rules={("venues", "events"): to_events, ("events", "participants"): to_participants, ("events", "volunteers"): to_volunteers},
         current_state=[stat("Lot", lot.code), stat("Location", lot.location or "Unknown"), stat("Working units", lot.quantity), stat("Events booked", len(mine)), stat("Working spares elsewhere", sum(r.quantity for r in spares))],
         before_after=[change_row(f"Working {lot.name} at {lot.location}", lot.quantity, left), change_row("Events changing equipment", 0, len(changed)), change_row("Events left short", 0, len(stranded))],
@@ -878,7 +878,7 @@ def vendor_shutdown(db: Session, festival: Festival, change: VendorShutdown) -> 
     lost = "It was not being counted, because its hygiene certificate lapsed." if not served else f"{vendor.capacity or 0:,} seats go."
     return Outcome(
         title=f"{vendor.name} shuts down",
-        headline=f"{lost} {plural(len(wiped), 'diet')} lose all cover and {plural(len(hit) - len(wiped), 'more')} lose seats.",
+        headline=f"{lost} {plural(len(wiped), 'diet')} lose all cover and {len(hit) - len(wiped)} more lose seats." if hit else f"{lost} No diet loses cover.",
         seed_module="vendors", seed_records={vendor.code},
         seed_impacts=[Impact("vendors", "critical" if wiped else "high", "fact", f"{vendor.name} ({vendor.menu or 'menu not stated'}) stops serving. {lost}", record_ref=vendor.code)],
         rules={("vendors", "participants"): to_participants, ("vendors", "finance"): to_finance},

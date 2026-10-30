@@ -186,7 +186,7 @@ export function Volunteers() {
 
   return (
     <div>
-      <PageHead title="Volunteers" simulated subtitle="Shifts, tasks and most volunteers are simulated: the pack lists only 6 core team volunteers">
+      <PageHead title="Crew" simulated subtitle="Shifts, tasks and most volunteers are simulated: the pack lists only 6 core team volunteers">
         {write && <><button className="button-ghost" onClick={() => setAdding("task")}><Plus size={16} /> Add task</button><button className="button-primary small" onClick={() => setAdding("volunteer")}><Plus size={16} /> Add volunteer</button></>}
       </PageHead>
       <Tabs value={tab} onChange={setTab} options={[["directory", "Directory"], ["understaffed", `Understaffed (${short.data?.length ?? 0})`], ["tasks", "Tasks"]]} />

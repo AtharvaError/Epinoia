@@ -171,7 +171,7 @@ export function Transport() {
   const vehicles = useQuery({ queryKey: ["vehicles", base], queryFn: () => api<Vehicle[]>(`${base}/transport/vehicles`) });
   return (
     <div>
-      <PageHead title="Transportation" simulated subtitle="All vehicles and trips here are simulated: the pack has no transport data">
+      <PageHead title="Transport" simulated subtitle="All vehicles and trips here are simulated: the pack has no transport data">
         {can("transport.write") && <><button className="button-ghost" onClick={() => setAdding("vehicle")}><Plus size={16} /> Add vehicle</button><button className="button-primary small" onClick={() => setAdding("route")}><Plus size={16} /> Add route</button></>}
       </PageHead>
       {routes.data && <RouteMap routes={routes.data.items} />}

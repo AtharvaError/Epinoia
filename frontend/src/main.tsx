@@ -28,13 +28,15 @@ const Ripple = page(() => import("./pages/Ripple"), "Ripple");
 const Safety = page(() => import("./pages/Safety"), "Safety");
 const Settings = page(() => import("./pages/Settings"), "Settings");
 const Transport = page(() => import("./pages/Transport"), "Transport");
+const Trends = page(() => import("./pages/Trends"), "Trends");
+const Vendors = page(() => import("./pages/Vendors"), "Vendors");
 const Venues = page(() => import("./pages/Venues"), "Venues");
 const Volunteers = page(() => import("./pages/Volunteers"), "Volunteers");
 
 try {
-  document.documentElement.dataset.theme = localStorage.getItem("festos.theme") ?? "night";
+  document.documentElement.dataset.theme = localStorage.getItem("festos.theme") ?? "day";
 } catch {
-  document.documentElement.dataset.theme = "night";
+  document.documentElement.dataset.theme = "day";
 }
 
 const queryClient = new QueryClient({
@@ -57,6 +59,8 @@ createRoot(document.getElementById("root")!).render(
           <Route element={<Protected />}>
             <Route index element={<CommandCenter />} />
             <Route path="check-in" element={<CheckIn />} />
+            <Route path="trends" element={<Trends />} />
+            <Route path="vendors" element={<Vendors />} />
             <Route path="events" element={<Events />} />
             <Route path="participants" element={<Participants />} />
             <Route path="accommodation" element={<Accommodation />} />

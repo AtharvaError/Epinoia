@@ -80,7 +80,7 @@ export function ImpactGraph({ nodes, edges, selected, onSelect, idle }: {
   const reached = nodes.filter((n) => n.depth !== null).length;
   return (
     <svg className={`impact-graph ${idle ? "idle" : ""}`} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="group"
-         aria-label={idle ? "The seven connected festival modules" : `The change reaches ${reached} of ${nodes.length} modules`}>
+         aria-label={idle ? "The connected festival modules" : `The change reaches ${reached} of ${nodes.length} modules`}>
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0 0L10 5L0 10z" fill="var(--cyan)" />

@@ -96,7 +96,7 @@ export function Safety() {
   const opened = params.get("open");
   return (
     <div>
-      <PageHead title="Safety & Incidents" simulated subtitle="FestOS tracks and notifies. Emergency decisions stay with the Safety Coordinator and Director.">
+      <PageHead title="Safety" simulated subtitle="FestOS tracks and notifies. Emergency decisions stay with the Safety Coordinator and Director.">
         {can("incidents.report") && <button className="button-primary small" onClick={() => setReporting(true)}><TriangleAlert size={16} /> Report incident</button>}
       </PageHead>
       {summary.data && (

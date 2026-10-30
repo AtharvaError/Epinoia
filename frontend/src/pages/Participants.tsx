@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Download, QrCode, Upload, UserPlus } from "lucide-react";
+import { Copy, Download, QrCode, Upload, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -22,9 +22,17 @@ interface Detail extends Row {
   accommodation: { room: string; hostel: string; status: string } | null;
   transport: { code: string; name: string; departure_at: string; status: string }[];
   issues: { issue: string; detail: string | null }[];
+  merch: { item: string; issued_at: string; issued_by: string | null }[];
+  merged_from: string[];
 }
+type Twin = Record<(typeof MERGE_FIELDS)[number], string | number | boolean | null> & { code: string; events: number; room: string | null; checkin_status: string };
 interface Options { contingents: { code: string; college: string }[]; events: { code: string; name: string }[] }
 
+const MERGE_FIELDS = ["full_name", "college", "phone", "email", "gender_as_given", "age", "accessibility_needs", "dietary_needs", "arrival_at", "departure_at", "tshirt_size", "accommodation_required"] as const;
+const MERGE_LABELS: Record<(typeof MERGE_FIELDS)[number], string> = {
+  full_name: "Name", college: "College", phone: "Phone", email: "Email", gender_as_given: "Gender as given", age: "Age", accessibility_needs: "Accessibility", dietary_needs: "Dietary",
+  arrival_at: "Arrival", departure_at: "Departure", tshirt_size: "T-shirt", accommodation_required: "Needs accommodation",
+};
 const yesNo = (value: boolean | null) => (value === null ? "Unknown" : value ? "Yes" : "No");
 const blankable = (value: string | null, restricted: boolean) => (restricted ? <span className="restricted">Restricted</span> : value);
 
@@ -90,6 +98,90 @@ function ParticipantForm({ existing, options, onDone }: { existing?: Detail; opt
   );
 }
 
+/** The person's festival in time order, so a gap or clash shows up where it happens. */
+function Journey({ p }: { p: Detail }) {
+  const steps: { at: string | null; title: string; note?: string; alert?: boolean }[] = [
+    { at: p.arrival_at, title: "Arrives", note: p.arrival_at ? p.contingent?.college : "Arrival time unknown", alert: !p.arrival_at },
+    ...p.transport.map((t) => ({ at: t.departure_at, title: t.name, note: `Trip ${t.code}, ${t.status}` })),
+    ...p.events.map((e) => ({ at: e.start_at, title: e.name, note: e.off_campus ? "Outside their stay" : e.clashes.length ? `Clashes with ${e.clashes.join(", ")}` : e.venue ?? undefined, alert: e.off_campus || e.clashes.length > 0 })),
+    ...p.merch.map((m) => ({ at: m.issued_at, title: `Collected ${m.item}`, note: m.issued_by ? `Issued by ${m.issued_by}` : undefined })),
+    { at: p.departure_at, title: "Leaves" },
+  ].sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
+  return (
+    <ol className="journey" aria-label="This person's festival, in time order">
+      <li className={p.accommodation_required && !p.accommodation ? "alert" : ""}>
+        <span>Stay</span>
+        <div><strong>{p.restricted && !p.accommodation ? "Restricted" : p.accommodation ? `${p.accommodation.hostel}, ${p.accommodation.room}` : `No room. Needs one: ${yesNo(p.accommodation_required)}`}</strong></div>
+      </li>
+      {steps.map((s, i) => (
+        <li key={`${s.title}-${i}`} className={s.alert ? "alert" : ""}>
+          <span>{s.at ? formatTime(s.at) : "Unknown"}</span>
+          <div><strong>{s.title}</strong>{s.note && <small>{s.note}</small>}</div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function DuplicatePair({ pair, left }: { pair: Twin[]; left: number }) {
+  const { base } = useFest();
+  const [keep, drop] = pair;
+  const differs = (field: (typeof MERGE_FIELDS)[number]) => keep[field] !== drop[field];
+  // A filled value beats a blank, so a merge never loses information by default.
+  const [fromDrop, setFromDrop] = useState<string[]>(MERGE_FIELDS.filter((f) => keep[f] === null && drop[f] !== null));
+  const [reason, setReason] = useState("");
+  const merge = useAction(() => api<{ freed_bed: boolean }>(`${base}/participants/merge`, { method: "POST", body: JSON.stringify({ keep: keep.code, drop: drop.code, take_from_drop: fromDrop, reason }) }), {
+    success: (r) => `${drop.code} merged into ${keep.code}${r.freed_bed ? ". One bed is free again" : ""}`,
+  });
+  const dismiss = useAction(() => api(`${base}/participants/duplicates/dismiss`, { method: "POST", body: JSON.stringify({ codes: pair.map((t) => t.code), reason }) }), { success: "Marked as different people" });
+  const show = (value: Twin[keyof Twin], field: string) => (value === null ? <span className="unknown">Blank</span> : typeof value === "boolean" ? yesNo(value) : field.endsWith("_at") ? formatTime(String(value)) : String(value));
+  return (
+    <>
+      <p className="muted small">{left} to review. Choose which value to keep wherever the two records differ.</p>
+      <div className="table-wrap flat">
+        <table>
+          <thead><tr><th scope="col">Field</th><th scope="col">{keep.code} (kept)</th><th scope="col">{drop.code}</th></tr></thead>
+          <tbody>
+            {MERGE_FIELDS.map((f) => (
+              <tr key={f} className={differs(f) ? "differs" : ""}>
+                <th scope="row">{MERGE_LABELS[f]}</th>
+                {[keep, drop].map((t, side) => (
+                  <td key={t.code}>
+                    {differs(f) ? <label className="check"><input type="radio" name={f} checked={fromDrop.includes(f) === (side === 1)} onChange={() => setFromDrop(side ? [...fromDrop, f] : fromDrop.filter((x) => x !== f))} /> {show(t[f], f)}</label> : show(t[f], f)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr><th scope="row">Events</th><td>{keep.events}</td><td>{drop.events}</td></tr>
+            <tr><th scope="row">Room</th><td>{keep.room ?? "None"}</td><td>{drop.room ?? "None"}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <form className="form" onSubmit={(e) => { e.preventDefault(); merge.mutate(); }}>
+        <Field label="Why?" hint="Both IDs stay on record, and this reason goes in the audit log."><textarea required minLength={5} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+        <ErrorNote error={merge.error || dismiss.error} />
+        <div className="row-actions">
+          <button className="button-primary" disabled={merge.isPending}>Merge into {keep.code}</button>
+          <button type="button" className="button-ghost" disabled={dismiss.isPending || reason.trim().length < 5} onClick={() => dismiss.mutate()}>They are different people</button>
+        </div>
+      </form>
+    </>
+  );
+}
+
+function DuplicateReview({ onClose }: { onClose: () => void }) {
+  const { base } = useFest();
+  const query = useQuery({ queryKey: ["duplicates", base], queryFn: () => api<Twin[][]>(`${base}/participants/duplicates`) });
+  const pair = query.data?.[0];
+  return (
+    <Dialog title="Possible duplicates" onClose={onClose} side>
+      <QueryState query={query}>
+        {pair ? <DuplicatePair key={pair.map((t) => t.code).join()} pair={pair} left={query.data!.length} /> : <p className="muted">Every flagged record has been reviewed.</p>}
+      </QueryState>
+    </Dialog>
+  );
+}
+
 function ParticipantDetail({ code, options, onClose }: { code: string; options?: Options; onClose: () => void }) {
   const { base, can } = useFest();
   const [view, setView] = useState<"detail" | "edit" | "delete">("detail");
@@ -113,6 +205,10 @@ function ParticipantDetail({ code, options, onClose }: { code: string; options?:
               <Pill value={p.checkin_status} tone={p.checkin_status === "checked_in" ? "ok" : undefined} />
               {can("participants.write") && <><button className="button-ghost" onClick={() => setView("edit")}>Edit</button><button className="button-ghost danger" onClick={() => setView("delete")}>Remove</button></>}
             </div>
+            {p.merged_from.length > 0 && <p className="muted small">Merged from {p.merged_from.join(", ")}</p>}
+            <h3>Their festival</h3>
+            <Journey p={p} />
+            <h3>Record</h3>
             <Facts items={[
               ["College", p.college], ["Contingent", p.contingent ? `${p.contingent.code}, led by ${p.contingent.leader ?? "unknown"}` : null], ["Age", p.age],
               ["Phone", blankable(p.phone, p.restricted)], ["Email", blankable(p.email, p.restricted)], ["Gender as given", blankable(p.gender_as_given, p.restricted)],
@@ -197,7 +293,7 @@ export function Participants() {
   const [filters, setFilters] = useState({ contingent: "", event: "", accommodation: "", checkin: "", status: "", flagged: params.has("flagged") });
   const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
-  const [dialog, setDialog] = useState<"add" | "import" | null>(null);
+  const [dialog, setDialog] = useState<"add" | "import" | "duplicates" | null>(params.has("duplicates") ? "duplicates" : null);
   const q = useDebounced(search);
   useEffect(() => setPage(1), [q, filters, sort]);
   const opened = params.get("open");
@@ -207,7 +303,8 @@ export function Participants() {
   const exportUrl = `${base}/participants/export.csv${queryString({ q, ...filters })}`;
   return (
     <div>
-      <PageHead title="Participants" subtitle="Every record, with what needs review">
+      <PageHead title="People" subtitle="Every record, with what needs review">
+        {can("participants.write") && can("participants.read_sensitive") && <button className="button-ghost" onClick={() => setDialog("duplicates")}><Copy size={16} /> Review duplicates</button>}
         {can("participants.checkin") && <Link className="button-ghost" to="/check-in"><QrCode size={16} /> Check-in</Link>}
         <a className="button-ghost" href={exportUrl} onClick={() => notify("Export started")}><Download size={16} /> Export CSV</a>
         {can("participants.write") && <button className="button-ghost" onClick={() => setDialog("import")}><Upload size={16} /> Import</button>}
@@ -233,6 +330,7 @@ export function Participants() {
       {opened && <ParticipantDetail code={opened} options={options.data} onClose={() => setParams({})} />}
       {dialog === "add" && (options.data ? <Dialog title="Add participant" onClose={() => setDialog(null)} side><ParticipantForm options={options.data} onDone={() => setDialog(null)} /></Dialog> : <Loading />)}
       {dialog === "import" && <ImportDialog onClose={() => setDialog(null)} />}
+      {dialog === "duplicates" && <DuplicateReview onClose={() => setDialog(null)} />}
     </div>
   );
 }

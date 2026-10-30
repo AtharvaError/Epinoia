@@ -30,13 +30,9 @@ export function Login() {
   return (
     <main className="login">
       <section className="login-hero">
-        <div className="brand brand-light"><span className="brand-mark" aria-hidden="true" />FestOS Command</div>
-        <h1>One command center. Every event. Zero chaos.</h1>
+        <div className="brand"><span className="brand-mark" aria-hidden="true" />FestOS</div>
+        <h1>The festival cannot pause. Neither can you.</h1>
         <p>See what a change will break before you make it.</p>
-        <svg className="login-wave" viewBox="0 0 800 260" preserveAspectRatio="none" aria-hidden="true">
-          <path d="M0 90C120 140 190 215 250 260H0V90Z" />
-          <path d="M800 120C680 135 560 190 480 260H800V120Z" />
-        </svg>
       </section>
 
       <section className="login-panel">

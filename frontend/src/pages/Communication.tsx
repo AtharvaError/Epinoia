@@ -65,7 +65,7 @@ export function Communication() {
   const options = useQuery({ queryKey: ["announcement-options", base], queryFn: () => api<Options>(`${base}/announcements/options`) });
   return (
     <div>
-      <PageHead title="Communication" subtitle="Reaches core team accounts in this app. Nothing is sent by email or SMS.">
+      <PageHead title="Messages" subtitle="Reaches core team accounts in this app. Nothing is sent by email or SMS.">
         {can("communication.write") && <button className="button-primary small" disabled={!options.data} onClick={() => setComposing(true)}><Send size={16} /> New announcement</button>}
       </PageHead>
       <Tabs value={tab} onChange={setTab} options={[["inbox", "My notifications"], ["sent", "Announcements"]]} />

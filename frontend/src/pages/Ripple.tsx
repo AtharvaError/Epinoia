@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, BedDouble, Bus, CalendarClock, Users, Wallet, type LucideIcon } from "lucide-react";
+import { Activity, BedDouble, Bus, CalendarClock, Copy, Plane, Shirt, Users, UtensilsCrossed, Wallet, Wrench, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { type GraphEdge, type GraphNode, ImpactChain, ImpactGraph } from "../components/ImpactGraph";
 import {
@@ -10,7 +10,7 @@ import {
 import { api } from "../lib/api";
 import { formatMoney, formatNumber, formatTime } from "../lib/format";
 
-type Scenario = "hostel_closure" | "venue_change" | "bus_delay" | "volunteers_unavailable" | "budget_reduction";
+type Scenario = "hostel_closure" | "venue_change" | "bus_delay" | "late_contingent" | "equipment_failure" | "vendor_shutdown" | "volunteers_unavailable" | "budget_reduction";
 type Change = Record<string, unknown>;
 
 interface Impact { module: string; severity: "critical" | "high" | "medium" | "low"; certainty: "fact" | "estimate"; explanation: string; recommended_action: string | null; record_ref: string | null; is_direct: boolean }
@@ -38,23 +38,29 @@ interface Options {
   routes: { code: string; name: string; expected_arrival_at: string; passengers: number; vehicle: string | null; status: string }[];
   volunteers: { code: string; name: string; shifts: number }[];
   budgets: { department: string; approved: string }[];
-  graph?: never;
+  equipment: { code: string; name: string; location: string | null; quantity: number; events: number }[];
+  vendors: { code: string; name: string; menu: string | null; capacity: number | null; dietary_options: string[] }[];
+  contingents: { code: string; college: string; members: number }[];
 }
 
 const SCENARIOS: { key: Scenario; label: string; hint: string; icon: LucideIcon }[] = [
-  { key: "hostel_closure", label: "Hostel unavailable", hint: "Who loses a bed, and where they go", icon: BedDouble },
-  { key: "venue_change", label: "Venue change", hint: "Capacity, clashes and kit", icon: CalendarClock },
-  { key: "bus_delay", label: "Bus delayed", hint: "Passengers and events at risk", icon: Bus },
-  { key: "volunteers_unavailable", label: "Volunteers unavailable", hint: "Open shifts and replacements", icon: Users },
-  { key: "budget_reduction", label: "Budget reduced", hint: "Shortfall and what to review", icon: Wallet },
+  { key: "hostel_closure", label: "A hostel closed", hint: "Who loses a bed, and where they go", icon: BedDouble },
+  { key: "venue_change", label: "A venue changed", hint: "Capacity, clashes and kit", icon: CalendarClock },
+  { key: "late_contingent", label: "A contingent is late", hint: "Events, rides and rooms they miss", icon: Plane },
+  { key: "bus_delay", label: "A bus is late", hint: "Passengers and events at risk", icon: Bus },
+  { key: "equipment_failure", label: "Equipment failed", hint: "Which events lose it, and what can replace it", icon: Wrench },
+  { key: "vendor_shutdown", label: "A vendor shut down", hint: "Dietary cover and settlement", icon: UtensilsCrossed },
+  { key: "volunteers_unavailable", label: "Volunteers dropped out", hint: "Open shifts and replacements", icon: Users },
+  { key: "budget_reduction", label: "The budget was cut", hint: "Shortfall and what to review", icon: Wallet },
+];
+// These two are settled at a desk, not simulated, so they link to the screen that handles them.
+const DESK_DISRUPTIONS: { label: string; hint: string; to: string; icon: LucideIcon }[] = [
+  { label: "A duplicate merchandise claim", hint: "Scan the pass at the merchandise desk", to: "/check-in", icon: Shirt },
+  { label: "A duplicate record", hint: "Compare both records, then merge them", to: "/participants?duplicates=1", icon: Copy },
 ];
 const SEVERITY_TONE = { critical: "bad", high: "warn", medium: "info", low: undefined } as const;
 const STATUS_TONE: Record<string, "ok" | "warn" | "bad" | "info" | undefined> = { applied: "ok", pending_approval: "warn", previewed: "info", stale: "bad", rejected: "bad", cancelled: undefined, superseded: undefined };
-const MODULE_LABEL: Record<string, string> = { participants: "Participants", events: "Events", venues: "Venues", volunteers: "Volunteers", transportation: "Transport", accommodation: "Accommodation", finance: "Finance" };
-const IDLE_NODES: GraphNode[] = Object.entries({ participants: "Participants", events: "Events", venues: "Venues & Resources", volunteers: "Volunteers", transportation: "Transportation", accommodation: "Accommodation", finance: "Finance" })
-  .map(([id, label]) => ({ id, label, depth: 1, severity: "low", records: 0, impacts: 0 }));
-const IDLE_EDGES: GraphEdge[] = [["participants", "events"], ["events", "venues"], ["venues", "volunteers"], ["volunteers", "transportation"], ["transportation", "accommodation"], ["accommodation", "finance"], ["finance", "participants"]]
-  .map(([source, target]) => ({ source, target, relation: "connects to", active: false }));
+const MODULE_LABEL: Record<string, string> = { participants: "Participants", events: "Events", venues: "Venues", volunteers: "Volunteers", transportation: "Transport", accommodation: "Accommodation", vendors: "Food & Vendors", finance: "Finance" };
 
 function money(value: number) {
   return `${value > 0 ? "+" : ""}${formatMoney(value)}`;
@@ -109,6 +115,37 @@ function ChangeForm({ scenario, options, change, setChange }: { scenario: Scenar
       </>
     );
   }
+  if (scenario === "late_contingent") {
+    return (
+      <>
+        <Field label="Contingent"><select required value={value("contingent_code")} onChange={set("contingent_code")}>
+          <option value="">Choose contingent</option>
+          {options.contingents.map((c) => <option key={c.code} value={c.code}>{c.college}: {c.members} members</option>)}
+        </select></Field>
+        <Field label="Delay in minutes"><input type="number" required min={1} max={4320} value={value("minutes")} onChange={set("minutes")} /></Field>
+      </>
+    );
+  }
+  if (scenario === "equipment_failure") {
+    const lot = options.equipment.find((r) => r.code === change.resource_code);
+    return (
+      <>
+        <Field label="Equipment"><select required value={value("resource_code")} onChange={(e) => setChange({ ...change, resource_code: e.target.value, units: options.equipment.find((r) => r.code === e.target.value)?.quantity ?? "" })}>
+          <option value="">Choose equipment</option>
+          {options.equipment.map((r) => <option key={r.code} value={r.code}>{r.name} at {r.location}: {r.quantity} units, {r.events} {r.events === 1 ? "event" : "events"}</option>)}
+        </select></Field>
+        <Field label="Units that failed" hint={lot ? `${lot.quantity} in this lot` : undefined}><input type="number" required min={1} max={lot?.quantity} value={value("units")} onChange={set("units")} /></Field>
+      </>
+    );
+  }
+  if (scenario === "vendor_shutdown") {
+    return (
+      <Field label="Vendor"><select required value={value("vendor_code")} onChange={set("vendor_code")}>
+        <option value="">Choose vendor</option>
+        {options.vendors.map((v) => <option key={v.code} value={v.code}>{v.name}, {v.menu}: {v.dietary_options.join(", ")}</option>)}
+      </select></Field>
+    );
+  }
   if (scenario === "volunteers_unavailable") {
     const picked = (change.volunteer_codes as string[] | undefined) ?? [];
     const term = filter.toLowerCase();
@@ -149,6 +186,15 @@ function CurrentState({ scenario, options, change }: { scenario: Scenario; optio
   } else if (scenario === "bus_delay") {
     const r = options.routes.find((x) => x.code === change.route_code);
     if (r) rows = [["Expected arrival", formatTime(r.expected_arrival_at)], ["Passengers", r.passengers], ["Vehicle", r.vehicle ?? "None"], ["Status", r.status]];
+  } else if (scenario === "late_contingent") {
+    const c = options.contingents.find((x) => x.code === change.contingent_code);
+    if (c) rows = [["College", c.college], ["Members", c.members]];
+  } else if (scenario === "equipment_failure") {
+    const r = options.equipment.find((x) => x.code === change.resource_code);
+    if (r) rows = [["Location", r.location ?? "Unknown"], ["Working units", r.quantity], ["Events booked", r.events]];
+  } else if (scenario === "vendor_shutdown") {
+    const v = options.vendors.find((x) => x.code === change.vendor_code);
+    if (v) rows = [["Menu", v.menu ?? "Not stated"], ["Seats", v.capacity ?? "Unknown"], ["Diets", v.dietary_options.join(", ")]];
   } else if (scenario === "budget_reduction") {
     const scope = options.budgets.filter((b) => !change.department || b.department === change.department);
     rows = [["Approved budget", formatMoney(scope.reduce((sum, b) => sum + Number(b.approved), 0))]];
@@ -238,10 +284,10 @@ function Decision({ simulation, onNew, onClosed }: { simulation: Simulation; onN
           )}
           <ErrorNote error={approve.error || submit.error || reject.error || cancel.error} />
           <div className="row-actions">
-            {canApprove && <button className="button-primary" disabled={approve.isPending || reasonMissing} onClick={() => approve.mutate()}>{approve.isPending ? "Applying" : "Approve and Apply Changes"}</button>}
+            {canApprove && <button className="button-primary" disabled={approve.isPending || reasonMissing} onClick={() => approve.mutate()}>{approve.isPending ? "Applying" : "Approve and apply"}</button>}
             {canApprove && status === "pending_approval" && <button className="button-ghost danger" disabled={reject.isPending || reason.trim().length < 5} onClick={() => reject.mutate()}>Reject</button>}
             {!canApprove && status === "previewed" && <button className="button-primary" disabled={submit.isPending} onClick={() => submit.mutate()}>Request approval</button>}
-            <button className="button-ghost" disabled={cancel.isPending} onClick={() => cancel.mutate()}>Cancel Simulation</button>
+            <button className="button-ghost" disabled={cancel.isPending} onClick={() => cancel.mutate()}>Cancel</button>
           </div>
           {!canApprove && <p className="muted small">Your role can simulate changes. A Festival Director applies them.</p>}
         </>
@@ -269,7 +315,7 @@ function Results({ simulation, onNew, onClosed, onTry }: { simulation: Simulatio
       <div className="stat-row">
         <div><span>Direct records</span><strong>{formatNumber(summary.direct_records)}</strong></div>
         <div><span>Indirect records</span><strong>{formatNumber(summary.indirect_records)}</strong></div>
-        <div><span>Modules reached</span><strong>{summary.modules} of 7</strong></div>
+        <div><span>Modules reached</span><strong>{summary.modules} of {report.graph.nodes.length}</strong></div>
         <div><span>Critical impacts</span><strong className={summary.critical ? "over-text" : ""}>{summary.critical}</strong></div>
         <div><span>Budget impact</span><strong>{summary.budget_impact ? money(summary.budget_impact) : "None"}</strong></div>
         <div><span>Facts / estimates</span><strong>{summary.facts} / {summary.estimates}</strong></div>
@@ -383,6 +429,9 @@ function payload(scenario: Scenario, change: Change): Change {
   if (scenario === "hostel_closure") return { hostel_code: change.hostel_code, extra_budget: Number(change.extra_budget || 0) };
   if (scenario === "venue_change") return { event_code: change.event_code, venue_code: change.venue_code, start_at: change.retime ? fromInput(String(change.start_at)) : null, end_at: change.retime ? fromInput(String(change.end_at)) : null };
   if (scenario === "bus_delay") return { route_code: change.route_code, minutes: Number(change.minutes) };
+  if (scenario === "late_contingent") return { contingent_code: change.contingent_code, minutes: Number(change.minutes) };
+  if (scenario === "equipment_failure") return { resource_code: change.resource_code, units: Number(change.units) };
+  if (scenario === "vendor_shutdown") return { vendor_code: change.vendor_code };
   if (scenario === "budget_reduction") return { department: change.department || null, amount: Number(change.amount) };
   return { volunteer_codes: change.volunteer_codes ?? [] };
 }
@@ -451,55 +500,62 @@ export function Ripple() {
     run.mutate({ scenario, change: payload(scenario, next) });
   };
 
+  const step = !simulation ? 1 : ["applied", "rejected", "cancelled"].includes(simulation.status) ? 3 : 2;
   return (
     <div>
-      <PageHead title="Ripple Simulator" subtitle="See what a change will break before you make it. Nothing changes until it is approved." />
-      <Tabs value={tab} onChange={setTab} options={[["simulate", "Simulate"], ["history", "History"], ...(can("audit.read") ? [["audit", "Audit log"] as ["audit", string]] : [])]} />
+      <PageHead title="Report a disruption" subtitle="Say what went wrong. See what it breaks. Nothing changes until it is approved." />
+      <Tabs value={tab} onChange={setTab} options={[["simulate", "Report"], ["history", "History"], ...(can("audit.read") ? [["audit", "Audit log"] as ["audit", string]] : [])]} />
       {tab === "history" && <History onOpen={open} />}
       {tab === "audit" && <AuditLog />}
       {tab === "simulate" && (
-        <div className="ripple">
-          <aside className="ripple-side">
-            <section className="panel">
-              <h2>1. Choose a scenario</h2>
-              <div className="scenario-list" role="radiogroup" aria-label="Scenario">
-                {SCENARIOS.map(({ key, label, hint, icon: Icon }) => (
-                  <button key={key} role="radio" aria-label={label} aria-checked={scenario === key} className={scenario === key ? "scenario active" : "scenario"} onClick={() => pick(key)}>
-                    <Icon size={18} aria-hidden="true" /><span><strong>{label}</strong><small>{hint}</small></span>
-                  </button>
-                ))}
+        <>
+          <ol className="steps" aria-label="Progress">
+            {["Report", "See the impact", "Decide"].map((label, i) => <li key={label} aria-current={step === i + 1 ? "step" : undefined}>{label}</li>)}
+          </ol>
+          {simulationId && detail.isPending && <Loading />}
+          {detail.isError && <ErrorNote error={detail.error} />}
+          {simulation ? (
+            <>
+              <div className="change-strip">
+                <span className="muted small">{SCENARIOS.find((s) => s.key === simulation.scenario)?.label}</span>
+                <button className="button-ghost" onClick={() => setParams({})}>Report something else</button>
               </div>
-            </section>
-            <section className="panel">
-              <h2>2. Describe the change</h2>
-              <QueryState query={options}>
-                {options.data && (
-                  <form className="form" onSubmit={(e) => { e.preventDefault(); run.mutate({ scenario, change: payload(scenario, change) }); }}>
-                    <ChangeForm key={scenario} scenario={scenario} options={options.data} change={change} setChange={setChange} />
-                    <CurrentState scenario={scenario} options={options.data} change={change} />
-                    <ErrorNote error={run.error} />
-                    <button className="button-primary" disabled={run.isPending || (scenario === "volunteers_unavailable" && !(change.volunteer_codes as string[] | undefined)?.length)}>
-                      <Activity size={16} /> {run.isPending ? "Simulating" : "Run Simulation"}
+              <Results key={simulation.id} simulation={simulation} onNew={open} onClosed={() => setParams({})} onTry={tryAction} />
+            </>
+          ) : (
+            <div className="report-grid">
+              <section className="panel">
+                <h2 className="panel-title">What went wrong?</h2>
+                <div className="scenario-list" role="radiogroup" aria-label="Disruption">
+                  {SCENARIOS.map(({ key, label, hint, icon: Icon }) => (
+                    <button key={key} role="radio" aria-label={label} aria-checked={scenario === key} className={scenario === key ? "scenario active" : "scenario"} onClick={() => pick(key)}>
+                      <Icon size={18} aria-hidden="true" /><span><strong>{label}</strong><small>{hint}</small></span>
                     </button>
-                    <p className="muted small">This only reads data. No records change.</p>
-                  </form>
-                )}
-              </QueryState>
-            </section>
-          </aside>
-          <div className="ripple-main">
-            {simulationId && detail.isPending && <Loading />}
-            {detail.isError && <ErrorNote error={detail.error} />}
-            {simulation && <Results key={simulation.id} simulation={simulation} onNew={open} onClosed={() => setParams({})} onTry={tryAction} />}
-            {!simulationId && (
-              <section className="panel ripple-empty">
-                <ImpactGraph nodes={IDLE_NODES} edges={IDLE_EDGES} idle />
-                <h2>Seven modules, one chain of consequences</h2>
-                <p className="muted">Choose a change on the left. The simulator follows real links between records, from who is housed where to which events they are registered for, and shows what is affected and what to do about it.</p>
+                  ))}
+                  {DESK_DISRUPTIONS.map(({ label, hint, to, icon: Icon }) => (
+                    <Link key={label} className="scenario" to={to}><Icon size={18} aria-hidden="true" /><span><strong>{label}</strong><small>{hint}</small></span></Link>
+                  ))}
+                </div>
               </section>
-            )}
-          </div>
-        </div>
+              <section className="panel">
+                <h2 className="panel-title">Tell us more</h2>
+                <QueryState query={options}>
+                  {options.data && (
+                    <form className="form" onSubmit={(e) => { e.preventDefault(); run.mutate({ scenario, change: payload(scenario, change) }); }}>
+                      <ChangeForm key={scenario} scenario={scenario} options={options.data} change={change} setChange={setChange} />
+                      <CurrentState scenario={scenario} options={options.data} change={change} />
+                      <ErrorNote error={run.error} />
+                      <button className="button-primary" disabled={run.isPending || (scenario === "volunteers_unavailable" && !(change.volunteer_codes as string[] | undefined)?.length)}>
+                        <Activity size={16} /> {run.isPending ? "Simulating" : "See what it breaks"}
+                      </button>
+                      <p className="muted small">This only reads data. No records change.</p>
+                    </form>
+                  )}
+                </QueryState>
+              </section>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

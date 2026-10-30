@@ -4,7 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { ErrorNote, Field, Moment, useAction, useFest } from "../components/ui";
 import { api } from "../lib/api";
 
-interface Pass { valid: boolean; code?: string; full_name?: string; college?: string; checkin_status?: string; registration_status?: string }
+interface Pass {
+  valid: boolean; code?: string; full_name?: string; college?: string; checkin_status?: string; registration_status?: string; tshirt_size?: string | null;
+  merch?: { item: string; issued_at: string; issued_by: string | null }[]; merch_items?: string[];
+}
 
 const SCAN_EVERY_MS = 150;
 const SCAN_WIDTH = 640;
@@ -72,15 +75,22 @@ export function CheckIn() {
     onDone: (r) => {
       setDone(r.full_name);
       setCount((n) => n + 1);
-      verify.reset();
+      verify.mutate(token);
     },
   });
+  const issue = useAction((item: string) => api<{ item: string; size: string | null }>(`${base}/passes/merch`, { method: "POST", body: JSON.stringify({ token, item }) }), {
+    success: (r) => `${r.item}${r.size ? ` ${r.size}` : ""} issued`, onDone: () => verify.mutate(token),
+  });
   const pass = verify.data;
+  const eligible = pass?.valid && pass.registration_status !== "cancelled";
 
+  const issueReset = useRef(issue.reset);
+  issueReset.current = issue.reset;
   const read = useRef((code: string) => {
     setScanning(false);
     setToken(code);
     setDone(undefined);
+    issueReset.current();
     verify.mutate(code);
   });
   const next = () => {
@@ -88,6 +98,7 @@ export function CheckIn() {
     setDone(undefined);
     verify.reset();
     checkIn.reset();
+    issue.reset();
     setScanning(true);
   };
 
@@ -116,7 +127,7 @@ export function CheckIn() {
           <p>This registration was cancelled. {pass.code}</p>
         </div>
       )}
-      {pass?.valid && pass.registration_status !== "cancelled" && pass.checkin_status === "checked_in" && (
+      {!done && pass?.valid && pass.registration_status !== "cancelled" && pass.checkin_status === "checked_in" && (
         <div className="scan-result warn" role="alert">
           <TriangleAlert size={44} aria-hidden="true" />
           <p className="scan-title">{pass.full_name}</p>
@@ -129,6 +140,18 @@ export function CheckIn() {
           <p>{pass.college} · {pass.code}</p>
           <button className="button-primary huge" disabled={checkIn.isPending} onClick={() => checkIn.mutate()}>{checkIn.isPending ? "Checking in" : "Check in"}</button>
         </div>
+      )}
+      {eligible && (
+        <section className="merch-desk" aria-label="Merchandise">
+          <h2>Merchandise</h2>
+          <div className="merch-items">
+            {pass.merch_items?.map((item) => {
+              const given = pass.merch?.find((m) => m.item === item);
+              return <button key={item} className={given ? "merch-item given" : "merch-item"} disabled={issue.isPending} onClick={() => issue.mutate(item)}>{given ? <CircleCheck size={16} aria-hidden="true" /> : null}{given ? `${item} collected` : `Issue ${item}${item === "T-shirt" && pass.tshirt_size ? ` (${pass.tshirt_size})` : ""}`}</button>;
+            })}
+          </div>
+          {issue.error && <div className="scan-result bad" role="alert"><CircleX size={32} aria-hidden="true" /><p>{issue.error.message}</p></div>}
+        </section>
       )}
       <ErrorNote error={verify.error || checkIn.error} />
 

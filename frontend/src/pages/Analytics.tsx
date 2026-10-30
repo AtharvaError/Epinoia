@@ -72,7 +72,7 @@ export function Analytics() {
   const fill = (s?.events ?? []).filter((e) => e.capacity).map((e) => ({ code: e.code, name: e.name, fill: Math.round((e.registered / e.capacity!) * 100) })).sort((a, b) => b.fill - a.fill);
   return (
     <div>
-      <PageHead title="Analytics & Reports" subtitle="Computed live from the database. Sections match what your role can read." />
+      <PageHead title="Reports" subtitle="Computed live from the database. Sections match what your role can read." />
       <div className="filters">
         <input type="date" aria-label="Day" value={filters.day} onChange={set("day")} />
         <select aria-label="Event" value={filters.event} onChange={set("event")}><option value="">All events</option>{options.data?.events.map((e) => <option key={e.code} value={e.code}>{e.name}</option>)}</select>

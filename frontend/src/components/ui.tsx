@@ -90,17 +90,13 @@ export function SectionHead({ title, children }: { title: string; children?: Rea
   return <div className="section-head"><h2>{title}</h2>{children}</div>;
 }
 
-/** The bold band that marks a key moment, in the same shape as the sign-in screen. */
+/** The one loud line on a screen: what just happened, or what needs a decision. */
 export function Moment({ eyebrow, title, children }: { eyebrow?: ReactNode; title: ReactNode; children?: ReactNode }) {
   return (
     <section className="moment">
       {eyebrow && <div className="moment-eyebrow">{eyebrow}</div>}
       <h1>{title}</h1>
       {children && <div className="moment-body">{children}</div>}
-      <svg className="moment-wave" viewBox="0 0 800 260" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M0 90C120 140 190 215 250 260H0V90Z" />
-        <path d="M800 120C680 135 560 190 480 260H800V120Z" />
-      </svg>
     </section>
   );
 }

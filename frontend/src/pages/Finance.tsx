@@ -153,7 +153,7 @@ export function Finance() {
   const t = summary.data?.totals;
   return (
     <div>
-      <PageHead title="Finance" simulated subtitle="Budgets, expenses and sponsors are simulated. External stay costs come from pack rates.">
+      <PageHead title="Money" simulated subtitle="Budgets, expenses and sponsors are simulated. External stay costs come from pack rates.">
         {can("finance.write") && <button className="button-ghost" onClick={() => setSponsor("new")}><Plus size={16} /> Add sponsor</button>}
         {can("finance.write") && <button className="button-primary small" onClick={() => setAdding(true)}><Plus size={16} /> Add expense</button>}
       </PageHead>
