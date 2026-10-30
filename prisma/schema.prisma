@@ -1,0 +1,38 @@
+// FestOS data model (OUTLINE ONLY — fill during H0–H5).
+// datasource: SQLite. Generator: prisma-client-js.
+//
+// Core entities & relationships to model:
+//
+//   Participant        1—* Registration *—1 Event
+//     - belongs to Contingent
+//     - has RoomAssignment, MerchIssue[], FoodNeed, status
+//     - sensitive: contact, medical, accessibility
+//     - qualityFlags: string[]  (duplicate_suspected, missing_gender, ...)
+//
+//   Contingent         1—* Participant   (leader, escorts)
+//   Event              *—1 Venue; has rounds, judges, volunteers, equipment
+//   Venue              capacity, setup/teardown windows
+//   Room (Hostel)      capacity, readiness, checkin/out windows, gender policy
+//   ExternalStay       beds, cost  (budget tracking)
+//   RoomAssignment     Participant ↔ Room/ExternalStay  (+ relaxed-constraint notes)
+//   InventoryItem      logistics + merch; location, state(reserved/in_transit/damaged/returned)
+//   MerchIssue         one per participant per SKU (enforce single-issue)
+//   Vendor             dietary coverage, hygiene cert, hours, capacity, rate, terms
+//   CoreTeamMember     role, shift
+//
+//   AuditEvent         actor, action, entity, before, after, reason?, timestamp  (append-only)
+//   User               email, passwordHash, role (director|lead|volunteer|readonly)
+//
+// NOTE: model UNKNOWN explicitly — nullable + a resolved/unverified flag,
+// never an implicit blank meaning "no need".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// TODO: define models per outline above.
