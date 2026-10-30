@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Bell, BedDouble, Bus, CalendarDays, ChevronsLeft, ChevronsRight, HandHelping, LayoutDashboard,
-  LogOut, Megaphone, Menu, Search, Settings, ShieldAlert, Users, Wallet, Warehouse, X, type LucideIcon,
+  LogOut, Megaphone, Menu, MessageCircleQuestion, Search, Settings, ShieldAlert, Users, Wallet, Warehouse, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
+import { Assistant, type Message } from "./Assistant";
 import { Toasts } from "./ui";
 import { api, type Festival, type Notifications, type SearchResult, type User } from "../lib/api";
 import { formatTime } from "../lib/format";
@@ -26,11 +27,11 @@ const NAV: NavItem[] = [
   { label: "Transportation", icon: Bus, permission: "transport.read", to: "/transportation" },
   { label: "Volunteers", icon: HandHelping, permission: "volunteers.read", to: "/volunteers" },
   { label: "Venues & Resources", icon: Warehouse, permission: "venues.read", to: "/venues" },
-  { label: "Finance", icon: Wallet, permission: "finance.read", phase: 4 },
-  { label: "Communication", icon: Megaphone, permission: "communication.read", phase: 4 },
-  { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", phase: 4 },
+  { label: "Finance", icon: Wallet, permission: "finance.read", to: "/finance" },
+  { label: "Communication", icon: Megaphone, permission: "communication.read", to: "/communication" },
+  { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", to: "/safety" },
   { label: "Ripple Simulator", icon: Activity, permission: "simulation.run", to: "/ripple" },
-  { label: "Analytics & Reports", icon: BarChart3, permission: "analytics.read", phase: 4 },
+  { label: "Analytics & Reports", icon: BarChart3, permission: "analytics.read", to: "/analytics" },
   { label: "Settings", icon: Settings, permission: "settings.manage", phase: 5 },
 ];
 
@@ -50,6 +51,36 @@ function remember(collapsed: boolean) {
   } catch {
     // Only a convenience: the sidebar still works without storage.
   }
+}
+
+/** The server sends no data over this socket, only a nudge to refetch through the normal routes. */
+function useLiveUpdates(festivalId: number | undefined) {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!festivalId) return;
+    let socket: WebSocket;
+    let retry: ReturnType<typeof setTimeout>;
+    let refresh: ReturnType<typeof setTimeout>;
+    let stopped = false;
+    const connect = () => {
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${scheme}://${location.host}/api/ws/${festivalId}`);
+      socket.onmessage = () => {
+        clearTimeout(refresh);
+        refresh = setTimeout(() => queryClient.invalidateQueries(), 300);
+      };
+      socket.onclose = (event) => {
+        if (!stopped && event.code !== 4401) retry = setTimeout(connect, 3000);
+      };
+    };
+    connect();
+    return () => {
+      stopped = true;
+      clearTimeout(retry);
+      clearTimeout(refresh);
+      socket.close();
+    };
+  }, [festivalId, queryClient]);
 }
 
 function Clock() {
@@ -191,6 +222,9 @@ export function Shell({ user }: { user: User }) {
   const festivals = useQuery({ queryKey: ["festivals"], queryFn: () => api<Festival[]>("/api/festivals") });
   const festival = festivals.data?.find((f) => f.id === festivalId) ?? festivals.data?.[0];
   const allowed = NAV.filter((item) => !item.permission || user.permissions.includes(item.permission));
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [conversation, setConversation] = useState<Message[]>([]);
+  useLiveUpdates(festival?.id);
 
   const toggle = () => {
     remember(!collapsed);
@@ -235,6 +269,7 @@ export function Shell({ user }: { user: User }) {
           {festival && <GlobalSearch festivalId={festival.id} />}
           <div className="topbar-end">
             <Clock />
+            <button className="icon-button" aria-label="Open the festival assistant" title="Festival assistant" onClick={() => setAssistantOpen(true)}><MessageCircleQuestion size={18} /></button>
             {festival && <NotificationCenter festivalId={festival.id} />}
             <Profile user={user} />
           </div>
@@ -244,6 +279,7 @@ export function Shell({ user }: { user: User }) {
           {festival && <Outlet context={{ festival, user }} />}
         </main>
       </div>
+      {assistantOpen && festival && <Assistant festivalId={festival.id} messages={conversation} setMessages={setConversation} onClose={() => setAssistantOpen(false)} />}
       <Toasts />
     </div>
   );

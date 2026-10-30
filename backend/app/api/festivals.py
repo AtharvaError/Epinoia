@@ -56,8 +56,8 @@ def notifications(festival: Festival = Depends(festival_access), user: User = De
     mine = (Notification.festival_id == festival.id, Notification.user_id == user.id)
     rows = db.scalars(select(Notification).where(*mine).order_by(Notification.id.desc()).limit(20))
     unread = db.scalar(select(func.count()).select_from(Notification).where(*mine, Notification.read_at.is_(None)))
-    return {"unread": unread, "items": [{"id": n.id, "title": n.title, "body": n.body, "link": n.link,
-                                         "read": n.read_at is not None, "created_at": n.created_at} for n in rows]}
+    return {"unread": unread, "items": [{"id": n.id, "title": n.title, "body": n.body, "link": n.link, "read": n.read_at is not None,
+                                         "acknowledged": n.acknowledged_at is not None, "created_at": n.created_at} for n in rows]}
 
 
 @router.post("/{festival_id}/notifications/{notification_id}/read", status_code=204)

@@ -9,6 +9,13 @@
       "autoPort": false
     },
     {
+      "name": "festos-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["D:/Epinoia/frontend/node_modules/vite/bin/vite.js", "preview", "D:/Epinoia/frontend"],
+      "port": 3000,
+      "autoPort": false
+    },
+    {
       "name": "festos-web",
       "runtimeExecutable": "node",
       "runtimeArgs": ["D:/Epinoia/frontend/node_modules/vite/bin/vite.js", "D:/Epinoia/frontend"],

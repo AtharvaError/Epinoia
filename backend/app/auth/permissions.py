@@ -7,13 +7,13 @@ READ_ALL = {
 }
 
 ALL = READ_ALL | {
-    "participants.read_sensitive", "participants.write", "participants.checkin", "events.write", "accommodation.write",
+    "participants.read_sensitive", "participants.write", "participants.checkin", "incidents.report", "events.write", "accommodation.write",
     "transport.write", "volunteers.write", "venues.write", "finance.write", "finance.approve",
     "communication.write", "incidents.write", "simulation.run", "simulation.approve", "audit.read",
     "settings.manage", "festivals.manage",
 }
 
-_HEAD = {"dashboard.read", "events.read", "venues.read", "communication.read", "incidents.read", "simulation.run"}
+_HEAD = {"dashboard.read", "events.read", "venues.read", "communication.read", "communication.write", "incidents.read", "incidents.report", "simulation.run"}
 
 ROLES: dict[str, tuple[str, set[str]]] = {
     "super_admin": ("Super Admin", ALL),
@@ -30,7 +30,7 @@ ROLES: dict[str, tuple[str, set[str]]] = {
     "finance_head": ("Finance Head", _HEAD | {"finance.read", "finance.write", "finance.approve", "analytics.read"}),
     "safety_coordinator": ("Safety Coordinator", _HEAD | {
         "participants.read", "participants.read_sensitive", "incidents.write", "audit.read"}),
-    "volunteer": ("Volunteer", {"events.read", "venues.read", "communication.read", "incidents.read",
+    "volunteer": ("Volunteer", {"events.read", "venues.read", "communication.read", "incidents.read", "incidents.report",
                                 "participants.checkin"}),
     "participant": ("Participant", {"events.read", "communication.read"}),
 }

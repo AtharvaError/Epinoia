@@ -178,7 +178,7 @@ def charts(db: Session, f: int, events: list[dict[str, Any]]) -> dict[str, Any]:
 
 def feed(db: Session, f: int) -> list[dict[str, Any]]:
     return _rows(db, """SELECT id, action, actor_label, summary, created_at FROM audit_logs
-                        WHERE festival_id=:f AND action<>'auth.login' ORDER BY id DESC LIMIT 12""", f=f)
+                        WHERE festival_id=:f AND action NOT IN ('auth.login', 'assistant.query') ORDER BY id DESC LIMIT 12""", f=f)
 
 
 def dashboard(db: Session, festival: Festival, today: date) -> dict[str, Any]:

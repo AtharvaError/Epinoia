@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     demo_password: str = ""
     environment: str = "development"
+    anthropic_api_key: str = ""  # Empty runs the assistant in offline mode.
 
 
 settings = Settings()

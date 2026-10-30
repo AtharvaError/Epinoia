@@ -94,7 +94,7 @@ export function CommandCenter() {
   const dashboard = useQuery({
     queryKey: ["dashboard", festival.id],
     queryFn: () => api<Dashboard>(`/api/festivals/${festival.id}/dashboard`),
-    refetchInterval: 15000,
+    refetchInterval: 60000,  // A safety net: the live socket refreshes this as changes happen.
     enabled: allowed,
   });
 

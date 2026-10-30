@@ -62,6 +62,12 @@ includes the sample allocation plan, so beds are already allocated:
 .venv/Scripts/python -m scripts.seed --reset
 ```
 
+## Assistant
+
+Without a key, the assistant runs in offline mode and answers set questions from
+festival data. To enable free-form questions, set `ANTHROPIC_API_KEY` in `.env` and
+restart the backend. The key stays on the server.
+
 ## Logins
 
 All accounts share the password in `DEMO_PASSWORD` in your `.env`.

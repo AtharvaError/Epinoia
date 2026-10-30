@@ -333,6 +333,33 @@ td.changed { font-weight: 700; color: var(--cyan); }
 .decision.done { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-color: var(--line); font-size: 14px; }
 .stale { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--high); font-size: 14px; }
 
+.page-stats { margin-bottom: 12px; }
+.meter-track div.over { background: var(--critical); }
+.impact-text { margin-top: 10px; font-size: 15px; }
+.announcements { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.announcements p { font-size: 14px; }
+.announcements p + p { margin-top: 6px; }
+ul.panel { padding: 6px 16px; }
+ul.panel li:first-child { border-top: 0; }
+.analytics { margin-top: 12px; }
+.reports { margin-top: 12px; }
+.share { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.share ul { flex: 1; min-width: 160px; list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.share li { display: flex; align-items: center; gap: 8px; padding: 3px 0; text-transform: capitalize; }
+.share li i { width: 10px; height: 10px; border-radius: 2px; }
+.share li strong { margin-left: auto; }
+.assistant-panel { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 100px); }
+.assistant-log { flex: 1; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; }
+.assistant-log .chips { flex-direction: column; align-items: stretch; }
+.assistant-log .chip { text-align: left; border-radius: 10px; color: var(--text); }
+.assistant-log .chip:hover { background: var(--surface-2); }
+.bubble { max-width: 90%; padding: 8px 12px; border-radius: 12px; font-size: 14px; white-space: pre-wrap; }
+.bubble.user { align-self: flex-end; background: var(--accent-strong); color: #fff; }
+.bubble.user.pending { opacity: .7; }
+.bubble.assistant { align-self: flex-start; background: var(--surface-2); }
+.bubble small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.assistant-panel .inline-form { flex-wrap: nowrap; margin-top: 0; }
+
 .state-empty, .state-error { display: grid; gap: 12px; justify-items: start; padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .state-empty h1 { font-size: 28px; }
 .state-error { color: var(--critical); }

@@ -99,6 +99,24 @@ Code lives in `backend/app/simulation/`.
 Roles without `simulation.approve` can simulate and request approval.
 Every impact is marked as a verified fact or an estimate.
 
+## Assistant
+
+Code lives in `backend/app/assistant/`.
+
+- `tools.py` holds a fixed set of read-only tools, each tied to a permission. A role's
+  tools are filtered before the model sees them, and every call is checked again.
+  There are no write tools, and results carry no participant names or contact details.
+- `agent.py` runs a tool loop with Claude when `ANTHROPIC_API_KEY` is set. With no key,
+  or if the API fails, offline mode maps the question to the same tools.
+- Questions are not logged, because people may type personal details into them. The
+  audit log records who asked and which tools ran.
+
+## Live updates
+
+After a commit that wrote an audit row, the server sends a `changed` message over a
+WebSocket. The message carries no data: clients refetch through normal routes, so a
+socket cannot leak a record. The hub is in-process, so it suits one API worker.
+
 ## Phases
 
 1. Foundation: setup, auth, database, roles, festival config, Command Center
