@@ -28,6 +28,7 @@ const Ripple = page(() => import("./pages/Ripple"), "Ripple");
 const Safety = page(() => import("./pages/Safety"), "Safety");
 const Settings = page(() => import("./pages/Settings"), "Settings");
 const Transport = page(() => import("./pages/Transport"), "Transport");
+const Vendors = page(() => import("./pages/Vendors"), "Vendors");
 const Venues = page(() => import("./pages/Venues"), "Venues");
 const Volunteers = page(() => import("./pages/Volunteers"), "Volunteers");
 
@@ -61,6 +62,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="participants" element={<Participants />} />
             <Route path="accommodation" element={<Accommodation />} />
             <Route path="transportation" element={<Transport />} />
+            <Route path="vendors" element={<Vendors />} />
             <Route path="volunteers" element={<Volunteers />} />
             <Route path="venues" element={<Venues />} />
             <Route path="ripple" element={<Ripple />} />

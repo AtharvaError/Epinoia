@@ -181,19 +181,25 @@ def load_pack(db: Session) -> Festival:
 
     _load_accommodation(db, fid)
 
+    seen_vendors: set[str] = set()
     for r in read("vendors.csv"):
+        vid = r["vendor_id"]
+        if vid in seen_vendors:
+            continue
+        seen_vendors.add(vid)
         expiry = date.fromisoformat(r["hygiene_certificate_expiry"]) if r["hygiene_certificate_expiry"] else None
-        db.add(Vendor(festival_id=fid, code=r["vendor_id"], name=r["vendor_name"], menu=blank(r["menu"]),
+        db.add(Vendor(festival_id=fid, code=vid, name=r["vendor_name"], menu=blank(r["menu"]),
                       dietary_options=[x.strip() for x in r["dietary_options"].split(";") if x.strip()],
                       hygiene_certificate_expiry=expiry, hours=blank(r["hours"]),
                       capacity=int(r["capacity"]) if r["capacity"].isdigit() else None,
-                      payment_terms=blank(r["payment_terms"])))
+                      payment_terms=blank(r["payment_terms"]),
+                      source="pack", original_pack_data=dict(r), operational_status="unconfirmed"))
         if expiry is None:
-            flag("vendor", r["vendor_id"], "hygiene_cert_missing")
+            flag("vendor", vid, "hygiene_cert_missing")
         elif expiry < festival.start_date:
-            flag("vendor", r["vendor_id"], "hygiene_cert_expired", r["hygiene_certificate_expiry"])
+            flag("vendor", vid, "hygiene_cert_expired", r["hygiene_certificate_expiry"])
         elif expiry <= festival.end_date:
-            flag("vendor", r["vendor_id"], "hygiene_cert_expires_during_fest", r["hygiene_certificate_expiry"])
+            flag("vendor", vid, "hygiene_cert_expires_during_fest", r["hygiene_certificate_expiry"])
 
     for r in read("inventory_logistics.csv"):
         db.add(Resource(festival_id=fid, code=r["item_id"], kind="logistics", name=r["item"], quantity=int(r["quantity"]),

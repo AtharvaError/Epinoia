@@ -67,6 +67,8 @@ class Festival(Timestamped, Base):
     end_date: Mapped[date] = mapped_column(Date)
     timezone: Mapped[str] = mapped_column(String(40), server_default="Asia/Kolkata")
     status: Mapped[str] = mapped_column(String(20), server_default="planning")
+    minor_housing_policy: Mapped[str | None] = mapped_column(String(40))
+    minor_policy_set_by: Mapped[str | None] = mapped_column(String(120))
     __table_args__ = (CheckConstraint("end_date >= start_date", name="dates_ordered"),)
 
 
@@ -128,6 +130,10 @@ class Participant(FestivalScoped, SoftDeleted, Base):
     registration_status: Mapped[str] = mapped_column(String(20), server_default="registered")
     checkin_status: Mapped[str] = mapped_column(String(20), server_default="not_arrived")
     qr_token: Mapped[str | None] = mapped_column(String(64), unique=True)
+    housing_preference: Mapped[str | None] = mapped_column(String(40))
+    housing_outreach_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    minor_supervision_status: Mapped[str | None] = mapped_column(String(30))
+    minor_supervision_note: Mapped[str | None] = mapped_column(String(240))
     __table_args__ = (UniqueConstraint("festival_id", "code"),)
 
 
@@ -227,6 +233,13 @@ class Hostel(FestivalScoped, Base):
     cost_per_bed_night: Mapped[Decimal | None] = mapped_column(Money)
     distance_km: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     transport_available: Mapped[bool | None] = mapped_column(Boolean)
+    accessibility_status: Mapped[str] = mapped_column(String(20), server_default="unknown")
+    step_free_entry: Mapped[bool | None] = mapped_column(Boolean)
+    ground_floor_rooms: Mapped[int | None] = mapped_column(Integer)
+    accessible_bathrooms: Mapped[int | None] = mapped_column(Integer)
+    has_lift: Mapped[bool | None] = mapped_column(Boolean)
+    accessibility_confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    accessibility_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), server_default="available")
     __table_args__ = (UniqueConstraint("festival_id", "code"),)
 
@@ -240,6 +253,9 @@ class Room(FestivalScoped, Base):
     gender_policy: Mapped[str | None] = mapped_column(String(20))  # boys | girls | NULL = not stated
     capacity: Mapped[int] = mapped_column(Integer)
     accessible: Mapped[bool | None] = mapped_column(Boolean)
+    policy_confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    near_washroom: Mapped[bool | None] = mapped_column(Boolean)
+    visual_assistance: Mapped[bool | None] = mapped_column(Boolean)
     status: Mapped[str] = mapped_column(String(20), server_default="available")
     __table_args__ = (UniqueConstraint("festival_id", "code"), CheckConstraint("capacity >= 0", name="capacity_valid"))
 
@@ -377,7 +393,45 @@ class Vendor(FestivalScoped, Base):
     capacity: Mapped[int | None] = mapped_column(Integer)
     payment_terms: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(20), server_default="active")
+    # Provenance & manually verified operational fields (never overwrite original CSV data)
+    source: Mapped[str] = mapped_column(String(20), server_default="pack")
+    original_pack_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    operational_status: Mapped[str] = mapped_column(String(24), server_default="unconfirmed")
+    capacity_unit: Mapped[str | None] = mapped_column(String(40))
+    capacity_verified_by: Mapped[str | None] = mapped_column(String(120))
+    capacity_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_dietary_options: Mapped[list[str] | None] = mapped_column(JSONB)
+    nut_free_verified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    allergen_controls_verified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    cross_contamination_note: Mapped[str | None] = mapped_column(String(240))
+    certificate_verified_by: Mapped[str | None] = mapped_column(String(120))
+    certificate_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    certificate_verification_note: Mapped[str | None] = mapped_column(String(240))
+    contact_name: Mapped[str | None] = mapped_column(String(120))
+    contact_phone: Mapped[str | None] = mapped_column(String(40))
+    verification_notes: Mapped[str | None] = mapped_column(Text)
+    verified_by: Mapped[str | None] = mapped_column(String(120))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (UniqueConstraint("festival_id", "code"),)
+
+
+class VendorInterruption(FestivalScoped, Base):
+    __tablename__ = "vendor_interruptions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vendor_id: Mapped[int] = mapped_column(ForeignKey("vendors.id", ondelete="CASCADE"), index=True)
+    vendor_code: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str] = mapped_column(Text)
+    simulation_report: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    replacement_codes: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    status: Mapped[str] = mapped_column(String(24), server_default="simulated")
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_by_name: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    decided_by_name: Mapped[str | None] = mapped_column(String(120))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class Announcement(FestivalScoped, Simulated, Base):

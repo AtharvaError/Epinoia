@@ -34,7 +34,18 @@ def contingent_codes(db: Session, festival_id: int) -> dict[int, str]:
 
 
 def to_person(p: Participant, contingents: dict[int, str]) -> Person:
-    return Person(p.id, p.code, contingents.get(p.contingent_id, "none"), p.gender_as_given, p.accessibility_needs, p.age, p.arrival_at, p.departure_at)
+    return Person(
+        p.id,
+        p.code,
+        contingents.get(p.contingent_id, "none"),
+        p.gender_as_given,
+        p.accessibility_needs,
+        p.age,
+        p.arrival_at,
+        p.departure_at,
+        p.housing_preference,
+        p.minor_supervision_status,
+    )
 
 
 def open_rooms(db: Session, festival_id: int, exclude_hostel_id: int | None = None) -> list[Beds]:
@@ -43,8 +54,29 @@ def open_rooms(db: Session, festival_id: int, exclude_hostel_id: int | None = No
         Room.festival_id == festival_id, Room.status == "available", Hostel.status == "available")
     if exclude_hostel_id:
         query = query.where(Hostel.id != exclude_hostel_id)
-    return [Beds(r.id, r.code, h.name, h.kind, r.floor, r.gender_policy, r.accessible, max(0, r.capacity - occupied.get(r.id, 0)),
-                 h.cost_per_bed_night, h.transport_available, h.distance_km) for r, h in db.execute(query)]
+    return [
+        Beds(
+            r.id,
+            r.code,
+            h.name,
+            h.kind,
+            r.floor,
+            r.gender_policy,
+            r.accessible,
+            max(0, r.capacity - occupied.get(r.id, 0)),
+            h.cost_per_bed_night,
+            h.transport_available,
+            h.distance_km,
+            h.accessibility_status,
+            h.step_free_entry,
+            h.ground_floor_rooms or 0,
+            h.accessible_bathrooms or 0,
+            h.has_lift,
+            r.near_washroom,
+            r.visual_assistance,
+        )
+        for r, h in db.execute(query)
+    ]
 
 
 def external_commitment(db: Session, festival_id: int, exclude: Collection[int] = ()) -> Decimal:
