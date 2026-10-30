@@ -90,6 +90,7 @@ class User(Timestamped, Simulated, Base):
     festival_id: Mapped[int | None] = mapped_column(ForeignKey("festivals.id"), index=True)  # NULL = all festivals
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    token_version: Mapped[int] = mapped_column(Integer, server_default="0")  # Raising it ends every session.
     role: Mapped[Role] = relationship(lazy="joined")
 
 

@@ -1,14 +1,18 @@
-from datetime import datetime
+import re
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.analytics.dashboard import dashboard, festival_phase
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
-from app.models import Event, Festival, Notification, Participant, User
+from app.models import Department, Event, Festival, Notification, Participant, User
+from app.services.audit import record
+from app.services.pack_import import DEPARTMENTS
 
 router = APIRouter(prefix="/api/festivals", tags=["festivals"])
 
@@ -24,6 +28,42 @@ def list_festivals(user: User = Depends(current_user), db: Session = Depends(get
         query = query.where(Festival.id == user.festival_id)
     return [{"id": f.id, "name": f.name, "start_date": f.start_date, "end_date": f.end_date,
              "phase": festival_phase(f, today(f))} for f in db.scalars(query)]
+
+
+class FestivalIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    start_date: date
+    end_date: date
+    status: str = Field(default="planning", pattern="^(planning|active|completed)$")
+
+    @model_validator(mode="after")
+    def dates_make_sense(self):
+        if self.end_date < self.start_date:
+            raise ValueError("The end date must not be before the start date")
+        return self
+
+
+@router.post("", status_code=201, dependencies=[Depends(require("festivals.manage"))])
+def create_festival(body: FestivalIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    slug = re.sub(r"[^a-z0-9]+", "-", body.name.lower()).strip("-") or "festival"
+    if db.scalar(select(Festival.id).where(Festival.slug == slug)):
+        raise HTTPException(409, "A festival with that name already exists")
+    festival = Festival(slug=slug, **body.model_dump())
+    db.add(festival)
+    db.flush()
+    db.add_all(Department(festival_id=festival.id, name=name) for name in DEPARTMENTS)
+    record(db, user, festival.id, "festival.create", "festival", festival.id, f"{user.name} created {festival.name}")
+    db.commit()
+    return {"id": festival.id, "name": festival.name}
+
+
+@router.patch("/{festival_id}", dependencies=[Depends(require("settings.manage"))])
+def update_festival(body: FestivalIn, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    for field, value in body.model_dump().items():
+        setattr(festival, field, value)
+    record(db, user, festival.id, "festival.update", "festival", festival.id, f"{user.name} updated festival details")
+    db.commit()
+    return {"id": festival.id}
 
 
 @router.get("/{festival_id}/dashboard", dependencies=[Depends(require("dashboard.read"))])

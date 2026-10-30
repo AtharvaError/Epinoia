@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+.claude
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+**/dist
+backups
+data
+src
+prisma
+docs

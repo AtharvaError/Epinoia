@@ -7,7 +7,6 @@ pydantic-settings
 pyjwt
 bcrypt
 python-multipart
-pytest
 httpx
 segno
 openpyxl

@@ -3,25 +3,32 @@ import "@fontsource-variable/instrument-sans";
 import "./styles.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode } from "react";
+import { type ComponentType, lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./components/Shell";
 import { useMe } from "./lib/auth";
-import { Accommodation } from "./pages/Accommodation";
-import { Analytics } from "./pages/Analytics";
-import { CommandCenter } from "./pages/CommandCenter";
-import { Communication } from "./pages/Communication";
-import { Events } from "./pages/Events";
-import { Finance } from "./pages/Finance";
-import { Login } from "./pages/Login";
-import { Participants } from "./pages/Participants";
-import { Ripple } from "./pages/Ripple";
-import { Safety } from "./pages/Safety";
-import { Transport } from "./pages/Transport";
-import { Venues } from "./pages/Venues";
-import { Volunteers } from "./pages/Volunteers";
+
+/** Each page loads when first opened, so charts and maps never slow the login screen. */
+function page<K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) {
+  return lazy(() => load().then((m) => ({ default: m[name] })));
+}
+
+const Accommodation = page(() => import("./pages/Accommodation"), "Accommodation");
+const Analytics = page(() => import("./pages/Analytics"), "Analytics");
+const CommandCenter = page(() => import("./pages/CommandCenter"), "CommandCenter");
+const Communication = page(() => import("./pages/Communication"), "Communication");
+const Events = page(() => import("./pages/Events"), "Events");
+const Finance = page(() => import("./pages/Finance"), "Finance");
+const Login = page(() => import("./pages/Login"), "Login");
+const Participants = page(() => import("./pages/Participants"), "Participants");
+const Ripple = page(() => import("./pages/Ripple"), "Ripple");
+const Safety = page(() => import("./pages/Safety"), "Safety");
+const Settings = page(() => import("./pages/Settings"), "Settings");
+const Transport = page(() => import("./pages/Transport"), "Transport");
+const Venues = page(() => import("./pages/Venues"), "Venues");
+const Volunteers = page(() => import("./pages/Volunteers"), "Volunteers");
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -39,7 +46,7 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<Suspense fallback={<div className="splash" role="status">Loading FestOS Command</div>}><Login /></Suspense>} />
           <Route element={<Protected />}>
             <Route index element={<CommandCenter />} />
             <Route path="events" element={<Events />} />
@@ -53,6 +60,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="communication" element={<Communication />} />
             <Route path="safety" element={<Safety />} />
             <Route path="analytics" element={<Analytics />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

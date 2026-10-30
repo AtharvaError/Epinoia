@@ -18,7 +18,8 @@ def venue_conflicts(db: Session, festival_id: int, venue_id: int, start: datetim
 
 
 def outside_venue_hours(venue: Venue, start: datetime, end: datetime) -> bool:
-    return not any(datetime.fromisoformat(w["start"]) <= start and end <= datetime.fromisoformat(w["end"]) for w in venue.availability)
+    """A venue with no stated hours has no limit to break."""
+    return bool(venue.availability) and not any(datetime.fromisoformat(w["start"]) <= start and end <= datetime.fromisoformat(w["end"]) for w in venue.availability)
 
 
 def participant_clashes(db: Session, participant_id: int, event: Event) -> list[Event]:

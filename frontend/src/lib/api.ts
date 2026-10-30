@@ -42,6 +42,7 @@ export interface User {
   id: number;
   name: string;
   email: string;
+  phone: string | null;
   festival_id: number | null;
   role: { key: string; name: string };
   permissions: string[];

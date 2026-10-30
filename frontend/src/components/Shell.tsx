@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Bell, BedDouble, Bus, CalendarDays, ChevronsLeft, ChevronsRight, HandHelping, LayoutDashboard,
-  LogOut, Megaphone, Menu, MessageCircleQuestion, Search, Settings, ShieldAlert, Users, Wallet, Warehouse, X, type LucideIcon,
+  LogOut, Megaphone, Menu, MessageCircleQuestion, Search, Settings, ShieldAlert, UserRound, Users, Wallet, Warehouse, X, type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { Assistant, type Message } from "./Assistant";
-import { Toasts } from "./ui";
+import { ProfileDialog } from "./ProfileDialog";
+import { Loading, Toasts } from "./ui";
 import { api, type Festival, type Notifications, type SearchResult, type User } from "../lib/api";
 import { formatTime } from "../lib/format";
 
@@ -32,7 +33,7 @@ const NAV: NavItem[] = [
   { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", to: "/safety" },
   { label: "Ripple Simulator", icon: Activity, permission: "simulation.run", to: "/ripple" },
   { label: "Analytics & Reports", icon: BarChart3, permission: "analytics.read", to: "/analytics" },
-  { label: "Settings", icon: Settings, permission: "settings.manage", phase: 5 },
+  { label: "Settings", icon: Settings, permission: "settings.manage", to: "/settings" },
 ];
 
 const COLLAPSE_KEY = "festos.sidebar";
@@ -50,6 +51,24 @@ function remember(collapsed: boolean) {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
   } catch {
     // Only a convenience: the sidebar still works without storage.
+  }
+}
+
+const FESTIVAL_KEY = "festos.festival";
+
+function rememberedFestival() {
+  try {
+    return Number(localStorage.getItem(FESTIVAL_KEY)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberFestival(id: number) {
+  try {
+    localStorage.setItem(FESTIVAL_KEY, String(id));
+  } catch {
+    // Only a convenience: it falls back to the newest festival.
   }
 }
 
@@ -185,6 +204,7 @@ function NotificationCenter({ festivalId }: { festivalId: number }) {
 
 function Profile({ user }: { user: User }) {
   const { open, setOpen, ref } = usePopover();
+  const [editing, setEditing] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const signOut = useMutation({
@@ -206,11 +226,13 @@ function Profile({ user }: { user: User }) {
           <strong>{user.name}</strong>
           <p className="muted small">{user.email}</p>
           <p className="muted small">{user.role.name}</p>
+          <button className="menu-action" onClick={() => { setOpen(false); setEditing(true); }}><UserRound size={16} /> Profile and password</button>
           <button className="menu-action" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
             <LogOut size={16} /> Sign out
           </button>
         </div>
       )}
+      {editing && <ProfileDialog user={user} onClose={() => setEditing(false)} />}
     </div>
   );
 }
@@ -218,7 +240,7 @@ function Profile({ user }: { user: User }) {
 export function Shell({ user }: { user: User }) {
   const [collapsed, setCollapsed] = useState(remembered);
   const [drawer, setDrawer] = useState(false);
-  const [festivalId, setFestivalId] = useState<number>();
+  const [festivalId, setFestivalId] = useState(rememberedFestival);
   const festivals = useQuery({ queryKey: ["festivals"], queryFn: () => api<Festival[]>("/api/festivals") });
   const festival = festivals.data?.find((f) => f.id === festivalId) ?? festivals.data?.[0];
   const allowed = NAV.filter((item) => !item.permission || user.permissions.includes(item.permission));
@@ -261,7 +283,7 @@ export function Shell({ user }: { user: User }) {
         <header className="topbar">
           <button className="icon-button menu-open" aria-label="Open menu" onClick={() => setDrawer(true)}><Menu size={18} /></button>
           {festivals.data && (
-            <select className="festival-select" aria-label="Festival" value={festival?.id} onChange={(e) => setFestivalId(Number(e.target.value))}>
+            <select className="festival-select" aria-label="Festival" value={festival?.id} onChange={(e) => { setFestivalId(Number(e.target.value)); rememberFestival(Number(e.target.value)); }}>
               {festivals.data.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>
           )}
@@ -276,7 +298,7 @@ export function Shell({ user }: { user: User }) {
         </header>
         <main className="content">
           {festivals.isError && <div className="state-error" role="alert">{festivals.error.message}</div>}
-          {festival && <Outlet context={{ festival, user }} />}
+          {festival && <Suspense fallback={<Loading />}><Outlet context={{ festival, user }} /></Suspense>}
         </main>
       </div>
       {assistantOpen && festival && <Assistant festivalId={festival.id} messages={conversation} setMessages={setConversation} onClose={() => setAssistantOpen(false)} />}

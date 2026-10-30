@@ -52,7 +52,7 @@ function RouteMap({ routes }: { routes: RouteRow[] }) {
     <section className="panel">
       <header><h2>Route map</h2><Simulated /></header>
       <p className="panel-note">Straight lines between approximate stops, not road routes. Nothing here is live vehicle tracking. Stops with no known location are left off.</p>
-      <div ref={holder} className="map" role="img" aria-label="Map of shuttle routes between stops and campus" />
+      <div ref={holder} className="map" role="region" aria-label="Map of shuttle routes between stops and campus" />
     </section>
   );
 }

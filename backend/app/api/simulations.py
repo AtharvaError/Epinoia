@@ -13,7 +13,6 @@ from app.models import (
 )
 from app.services.housing import ACTIVE, AccommodationAllocation
 from app.simulation import engine
-from app.simulation.graph import EDGES, MODULES
 from app.simulation.scenarios import SCENARIOS
 
 router = APIRouter(prefix="/api/festivals/{festival_id}", tags=["ripple simulator"])
@@ -67,16 +66,12 @@ def options(festival: Festival = Depends(festival_access), db: Session = Depends
     }
 
 
-@router.get("/simulations/graph", dependencies=[Depends(require("simulation.run"))])
-def dependency_graph():
-    return {"modules": MODULES, "edges": [{"source": e.source, "target": e.target, "relation": e.relation} for e in EDGES]}
-
-
-def detail(db: Session, festival: Festival, simulation: Simulation, user: User) -> dict[str, Any]:
+def detail(db: Session, festival: Festival, simulation: Simulation, user: User, just_computed: bool = False) -> dict[str, Any]:
     result = row(simulation, user_names(db))
     report = {k: v for k, v in simulation.report.items() if k != "plan"}
+    still_open = simulation.status in engine.OPEN_STATUSES
     result.update(report=report, proposed_change=simulation.proposed_change,
-                  current=engine.is_current(db, festival, simulation) if simulation.status in engine.OPEN_STATUSES else None,
+                  current=(just_computed or engine.is_current(db, festival, simulation)) if still_open else None,
                   can_approve="simulation.approve" in permissions_of(user))
     approval = db.scalar(select(ChangeApproval).where(ChangeApproval.simulation_id == simulation.id).order_by(ChangeApproval.id.desc()).limit(1))
     result["approval"] = approval and {"status": approval.status, "reason": approval.reason, "decided_at": approval.decided_at, "decided_by": user_names(db).get(approval.decided_by_id)}
@@ -85,7 +80,7 @@ def detail(db: Session, festival: Festival, simulation: Simulation, user: User) 
 
 @router.post("/simulations", status_code=201, dependencies=[Depends(require("simulation.run"))])
 def run_simulation(body: PreviewIn, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return detail(db, festival, engine.preview(db, festival, user, body.scenario, body.change), user)
+    return detail(db, festival, engine.preview(db, festival, user, body.scenario, body.change), user, just_computed=True)
 
 
 @router.get("/simulations", dependencies=[Depends(require("simulation.run"))])
@@ -127,7 +122,7 @@ def cancel(simulation_id: int, festival: Festival = Depends(festival_access), us
 
 @router.post("/simulations/{simulation_id}/recalculate", status_code=201, dependencies=[Depends(require("simulation.run"))])
 def recalculate(simulation_id: int, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
-    return detail(db, festival, engine.recalculate(db, festival, user, simulation_id), user)
+    return detail(db, festival, engine.recalculate(db, festival, user, simulation_id), user, just_computed=True)
 
 
 @router.get("/audit", dependencies=[Depends(require("audit.read"))])

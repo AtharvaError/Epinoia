@@ -13,7 +13,7 @@ docker compose up -d --wait db
 ```bash
 cd backend
 python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt
+.venv/Scripts/python -m pip install -r requirements-dev.txt
 .venv/Scripts/python -m alembic upgrade head
 .venv/Scripts/python -m scripts.seed
 ```

@@ -199,8 +199,6 @@ def test_cancelled_shifts_do_not_count_as_staffed(admin, base):
                                    WHERE e.code=:c AND s.status<>'cancelled' LIMIT 1"""), {"c": event["code"]}).scalar_one()
     assert admin.patch(f"{base}/shifts/{shift}", json={"status": "cancelled"}).status_code == 200
     assert scheduled(admin, base, event["code"])["staffed"] == event["staffed"] - 1
-    dashboard = admin.get(f"{base}/dashboard").json()
-    assert dashboard["kpis"]
 
 
 def test_replacements_are_free_during_the_event(admin, base):

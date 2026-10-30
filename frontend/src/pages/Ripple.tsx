@@ -176,7 +176,7 @@ function ImpactList({ impacts, module, onClear }: { impacts: Impact[]; module: s
         {(["all", "fact", "estimate"] as const).map((c) => <button key={c} className={certainty === c ? "chip active" : "chip"} onClick={() => setCertainty(c)}>{c === "all" ? "All" : c === "fact" ? "Verified facts" : "Estimates"}</button>)}
         {module && <button className="chip active" onClick={onClear}>{MODULE_LABEL[module]} only, clear</button>}
       </div>
-      <ul className="impacts">
+      <ul className="impacts" tabIndex={0} aria-label="Impacts list">
         {shown.map((i, index) => (
           <li key={`${i.explanation}-${index}`} className={`impact impact-${i.severity}`}>
             <div className="impact-tags">

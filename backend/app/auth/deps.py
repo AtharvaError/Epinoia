@@ -10,11 +10,17 @@ from app.models import Festival, User
 COOKIE = "festos_session"
 
 
+def user_from_token(db: Session, token: str | None) -> User | None:
+    claims = verify_token(token) if token else None
+    if not claims:
+        return None
+    user = db.get(User, claims[0])
+    return user if user and user.is_active and user.token_version == claims[1] else None
+
+
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    token = request.cookies.get(COOKIE)
-    user_id = verify_token(token) if token else None
-    user = db.get(User, user_id) if user_id else None
-    if not user or not user.is_active:
+    user = user_from_token(db, request.cookies.get(COOKIE))
+    if not user:
         raise HTTPException(401, "Not signed in")
     return user
 

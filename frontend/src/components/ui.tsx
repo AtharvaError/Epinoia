@@ -106,7 +106,7 @@ export function DataTable<T>({ rows, columns, rowKey, onRow, empty }: {
 }) {
   if (!rows.length) return <p className="table-empty muted">{empty}</p>;
   return (
-    <div className="table-wrap">
+    <div className="table-wrap" role="region" aria-label="Table, scrolls sideways on small screens" tabIndex={0}>
       <table>
         <thead><tr>{columns.map((c) => <th key={c.label} scope="col" className={c.className}>{c.label}</th>)}</tr></thead>
         <tbody>

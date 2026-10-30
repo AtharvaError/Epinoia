@@ -34,13 +34,10 @@ UNALLOCATED = """
       AND NOT EXISTS (SELECT 1 FROM accommodation_allocations a WHERE a.participant_id=p.id AND a.status<>'cancelled')"""
 EVENT_LOAD = """
     SELECT e.id, e.code, e.name, e.status, e.volunteers_needed, v.name AS venue, v.capacity,
-           count(DISTINCT r.id) AS registered, count(DISTINCT s.id) AS staffed
-    FROM events e
-    LEFT JOIN venues v ON v.id=e.venue_id
-    LEFT JOIN registrations r ON r.event_id=e.id
-    LEFT JOIN volunteer_shifts s ON s.event_id=e.id AND s.status<>'cancelled'
-    WHERE e.festival_id=:f AND e.deleted_at IS NULL
-    GROUP BY e.id, v.id"""
+           (SELECT count(*) FROM registrations r WHERE r.event_id=e.id) AS registered,
+           (SELECT count(*) FROM volunteer_shifts s WHERE s.event_id=e.id AND s.status<>'cancelled') AS staffed
+    FROM events e LEFT JOIN venues v ON v.id=e.venue_id
+    WHERE e.festival_id=:f AND e.deleted_at IS NULL"""
 CLASHES = """
     SELECT count(DISTINCT r1.participant_id) FROM registrations r1
     JOIN registrations r2 ON r2.participant_id=r1.participant_id AND r1.event_id<r2.event_id

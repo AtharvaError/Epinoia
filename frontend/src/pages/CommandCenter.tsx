@@ -137,7 +137,7 @@ export function CommandCenter() {
         <section className="panel feed-panel">
           <header><h2>Live operations feed</h2></header>
           {feed.length ? (
-            <ol>{feed.map((f) => <li key={f.id}><p>{f.summary}</p><small>{f.actor_label} · {formatTime(f.created_at)}</small></li>)}</ol>
+            <ol tabIndex={0} aria-label="Recent activity">{feed.map((f) => <li key={f.id}><p>{f.summary}</p><small>{f.actor_label} · {formatTime(f.created_at)}</small></li>)}</ol>
           ) : <p className="muted">No activity recorded yet.</p>}
         </section>
       </div>

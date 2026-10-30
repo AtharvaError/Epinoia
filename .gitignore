@@ -8,8 +8,9 @@ node_modules/
 .next/
 dist/
 
-# Secrets
+# Secrets and backups
 .env
+backups/
 
 # Python
 .venv/
