@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.common import by_code, paged
+from app.api.common import by_code, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import Event, Festival, Participant, Registration, Route, TransportAssignment, User, Vehicle
@@ -88,12 +88,13 @@ def update_vehicle(code: str, body: VehicleIn, festival: Festival = Depends(fest
 
 
 @router.get("/routes", dependencies=[Depends(require("transport.read"))])
-def list_routes(page: int = Query(1, ge=1), status: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+def list_routes(page: int = Query(1, ge=1), status: str | None = None, sort: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = select(Route).where(Route.festival_id == festival.id)
     if status:
         query = query.where(Route.status == status)
     riders, vehicles = rider_counts(db, festival.id), vehicle_map(db, festival.id)
-    return paged(db, query.order_by(Route.departure_at.nulls_last(), Route.code), page, lambda r: route_row(r, riders, vehicles))
+    columns = {"code": Route.code, "name": Route.name, "departs": Route.departure_at, "arrives": Route.expected_arrival_at, "status": Route.status}
+    return paged(db, ordered(query, sort, columns, Route.departure_at.nulls_last(), Route.code), page, lambda r: route_row(r, riders, vehicles))
 
 
 def next_route_code(db: Session, festival_id: int) -> str:

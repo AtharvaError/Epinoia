@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.common import by_code, like, paged
+from app.api.common import by_code, like, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import Department, Event, Festival, Task, User, Volunteer, VolunteerShift
@@ -73,7 +73,7 @@ def row(v: Volunteer, names: dict[int, str], shifts: dict[int, int]) -> dict[str
 
 
 @router.get("/volunteers", dependencies=[Depends(require("volunteers.read"))])
-def list_volunteers(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), department: str | None = None, status: str | None = None,
+def list_volunteers(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), department: str | None = None, status: str | None = None, sort: str | None = None,
                     festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = select(Volunteer).where(Volunteer.festival_id == festival.id)
     if q:
@@ -83,7 +83,10 @@ def list_volunteers(page: int = Query(1, ge=1), q: str | None = Query(None, max_
     if status:
         query = query.where(Volunteer.status == status)
     names, shifts = departments(db, festival.id), shift_counts(db, festival.id)
-    return paged(db, query.order_by(Volunteer.code), page, lambda v: row(v, names, shifts))
+    columns = {"code": Volunteer.code, "name": Volunteer.name, "status": Volunteer.status,
+               "department": select(Department.name).where(Department.id == Volunteer.department_id).correlate(Volunteer).scalar_subquery(),
+               "shifts": select(func.count()).where(VolunteerShift.volunteer_id == Volunteer.id, VolunteerShift.status != "cancelled").scalar_subquery()}
+    return paged(db, ordered(query, sort, columns, Volunteer.code), page, lambda v: row(v, names, shifts))
 
 
 def event_staffing(db: Session, festival_id: int) -> list[dict[str, Any]]:

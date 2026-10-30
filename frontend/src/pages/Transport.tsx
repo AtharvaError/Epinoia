@@ -50,7 +50,7 @@ function RouteMap({ routes }: { routes: RouteRow[] }) {
   if (!unique.length) return null;
   return (
     <section className="panel">
-      <header><h2>Route map</h2><Simulated /></header>
+      <header><h2>Route map</h2></header>
       <p className="panel-note">Straight lines between approximate stops, not road routes. Nothing here is live vehicle tracking. Stops with no known location are left off.</p>
       <div ref={holder} className="map" role="region" aria-label="Map of shuttle routes between stops and campus" />
     </section>
@@ -142,35 +142,36 @@ function VehicleForm({ onClose }: { onClose: () => void }) {
 }
 
 const routeColumns: Column<RouteRow>[] = [
-  { label: "Trip", cell: (r) => <span className="mono">{r.code}</span> },
-  { label: "Route", cell: (r) => <strong>{r.name}</strong> },
-  { label: "Departs", cell: (r) => formatTime(r.departure_at) },
-  { label: "Arrives", cell: (r) => formatTime(r.expected_arrival_at) },
+  { label: "Trip", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
+  { label: "Route", sort: "name", cell: (r) => <strong>{r.name}</strong> },
+  { label: "Departs", sort: "departs", cell: (r) => formatTime(r.departure_at) },
+  { label: "Arrives", sort: "arrives", cell: (r) => formatTime(r.expected_arrival_at) },
   { label: "Vehicle", cell: (r) => r.vehicle?.code ?? "Not assigned" },
   { label: "Passengers", cell: (r) => (r.vehicle ? `${r.passengers} / ${r.vehicle.capacity}` : r.passengers), className: "num" },
-  { label: "Status", cell: (r) => <Pill value={r.status} tone={TONE[r.status]} /> },
+  { label: "Status", sort: "status", cell: (r) => <Pill value={r.status} tone={TONE[r.status]} /> },
 ];
 
 const vehicleColumns: Column<Vehicle>[] = [
-  { label: "ID", cell: (v) => <span className="mono">{v.code}</span> },
-  { label: "Type", cell: (v) => v.vehicle_type },
-  { label: "Seats", cell: (v) => v.capacity, className: "num" },
-  { label: "Status", cell: (v) => <Pill value={v.status} tone={v.status === "available" ? "ok" : "warn"} /> },
+  { label: "ID", value: (v) => v.code, cell: (v) => <span className="mono">{v.code}</span> },
+  { label: "Type", value: (v) => v.vehicle_type, cell: (v) => v.vehicle_type },
+  { label: "Seats", value: (v) => v.capacity, cell: (v) => v.capacity, className: "num" },
+  { label: "Status", value: (v) => v.status, cell: (v) => <Pill value={v.status} tone={v.status === "available" ? "ok" : "warn"} /> },
 ];
 
 export function Transport() {
   const { base, can } = useFest();
   const [tab, setTab] = useState<"routes" | "vehicles">("routes");
   const [status, setStatus] = useState("");
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const [opened, setOpened] = useState<string>();
   const [adding, setAdding] = useState<"route" | "vehicle" | null>(null);
-  useEffect(() => setPage(1), [status]);
-  const routes = usePaged<RouteRow>(`${base}/transport/routes`, { status, page });
+  useEffect(() => setPage(1), [status, sort]);
+  const routes = usePaged<RouteRow>(`${base}/transport/routes`, { status, sort, page });
   const vehicles = useQuery({ queryKey: ["vehicles", base], queryFn: () => api<Vehicle[]>(`${base}/transport/vehicles`) });
   return (
     <div>
-      <PageHead title="Transportation" subtitle="All vehicles and trips here are simulated: the pack has no transport data">
+      <PageHead title="Transportation" simulated subtitle="All vehicles and trips here are simulated: the pack has no transport data">
         {can("transport.write") && <><button className="button-ghost" onClick={() => setAdding("vehicle")}><Plus size={16} /> Add vehicle</button><button className="button-primary small" onClick={() => setAdding("route")}><Plus size={16} /> Add route</button></>}
       </PageHead>
       {routes.data && <RouteMap routes={routes.data.items} />}
@@ -178,7 +179,7 @@ export function Transport() {
       {tab === "routes" && (
         <>
           <div className="filters"><select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option>{["scheduled", "in_transit", "delayed", "arrived", "cancelled"].map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}</select></div>
-          <QueryState query={routes}>{routes.data && <><DataTable rows={routes.data.items} columns={routeColumns} rowKey={(r) => r.code} empty="No trips match." onRow={(r) => setOpened(r.code)} /><Pagination page={routes.data.page} pages={routes.data.pages} total={routes.data.total} onPage={setPage} /></>}</QueryState>
+          <QueryState query={routes}>{routes.data && <><DataTable rows={routes.data.items} columns={routeColumns} rowKey={(r) => r.code} empty="No trips match." onRow={(r) => setOpened(r.code)} sort={sort} onSort={setSort} /><Pagination page={routes.data.page} pages={routes.data.pages} total={routes.data.total} onPage={setPage} /></>}</QueryState>
         </>
       )}
       {tab === "vehicles" && <QueryState query={vehicles}>{vehicles.data && <DataTable rows={vehicles.data} columns={vehicleColumns} rowKey={(v) => v.code} empty="No vehicles yet." />}</QueryState>}

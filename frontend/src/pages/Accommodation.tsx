@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import {
   type Column, DataTable, Dialog, ErrorNote, Field, PageHead, Pagination, Pill, QueryState, Tabs, useAction, useDebounced, useFest, usePaged,
@@ -22,11 +23,59 @@ interface Plan { summary: PlanSummary; state_hash: string; budget_limit: string 
 interface RoomRow { code: string; hostel: string; floor: number | null; gender_policy: string | null; capacity: number; occupied: number; available: number; accessible: boolean | null; status: string }
 interface AllocationRow { id: number; participant: string; name: string; room: string; status: string; check_in_at: string | null; check_out_at: string | null; relaxed_constraints: string[]; override_reason: string | null }
 interface Unallocated { code: string; name: string; college: string; gender: string | null; accessibility: string | null; restricted: boolean }
+interface MapRoom { code: string; floor: number | null; capacity: number; occupied: number; gender_policy: string | null; accessible: boolean | null; status: string }
+interface MapHostel { code: string; name: string; kind: string; status: string; rooms: MapRoom[] }
+
+const ROOM_STATES: [string, string][] = [["free", "Empty"], ["part", "Part full"], ["full", "Full"], ["over", "Over capacity"], ["closed", "Closed"]];
 
 const RELAXED: Record<string, string> = {
   room_set_by_property: "Exact room is set by the external property",
   minor_off_campus: "Participant under 18 placed off campus, needs review",
 };
+
+function roomState(room: MapRoom, hostel: MapHostel) {
+  if (room.occupied > room.capacity) return "over";
+  if (room.status !== "available" || hostel.status !== "available" || !room.capacity) return "closed";
+  if (room.occupied === room.capacity) return "full";
+  return room.occupied ? "part" : "free";
+}
+
+function RoomMap({ onRoom }: { onRoom: (code: string) => void }) {
+  const { base } = useFest();
+  const query = useQuery({ queryKey: ["room-map", base], queryFn: () => api<MapHostel[]>(`${base}/accommodation/room-map`) });
+  return (
+    <QueryState query={query}>
+      <div className="room-key" aria-label="Room map key">
+        {ROOM_STATES.map(([key, label]) => <span key={key}><i className={`room-swatch room-${key}`} />{label}</span>)}
+        <span><i className="room-swatch room-free access" />Accessible</span>
+      </div>
+      <div className="room-map">
+        {query.data?.map((hostel) => {
+          const floors = [...new Set(hostel.rooms.map((r) => r.floor))];
+          const free = hostel.rooms.reduce((sum, r) => sum + (roomState(r, hostel) === "closed" ? 0 : Math.max(0, r.capacity - r.occupied)), 0);
+          return (
+            <section key={hostel.code} className="panel">
+              <header><h2>{hostel.name}</h2><span className={free ? "muted small" : "over-text small"}>{hostel.status === "available" ? `${formatNumber(free)} free ${free === 1 ? "bed" : "beds"}` : hostel.status}</span></header>
+              {floors.map((floor) => (
+                <div key={floor ?? "unknown"} className="room-floor">
+                  <span className="small muted">{floor === null ? "Floor not stated" : floor === 0 ? "Ground" : `Floor ${floor}`}</span>
+                  <div className="room-grid">
+                    {hostel.rooms.filter((r) => r.floor === floor).map((r) => {
+                      const state = roomState(r, hostel);
+                      const label = `${r.code}: ${r.occupied} of ${r.capacity} beds used, ${ROOM_STATES.find(([key]) => key === state)![1].toLowerCase()}${r.gender_policy ? `, ${r.gender_policy}` : ""}${r.accessible ? ", accessible" : ""}`;
+                      // tabIndex -1: hundreds of tab stops would trap keyboard users, and the Rooms tab lists the same data.
+                      return <button key={r.code} tabIndex={-1} className={`room room-${state} ${r.accessible ? "access" : ""}`} title={label} aria-label={label} onClick={() => onRoom(r.code)}>{r.occupied}/{r.capacity}</button>;
+                    })}
+                  </div>
+                </div>
+              ))}
+            </section>
+          );
+        })}
+      </div>
+    </QueryState>
+  );
+}
 
 function PlanPanel({ summary }: { summary: Summary }) {
   const { base, can } = useFest();
@@ -143,38 +192,46 @@ function AddRoom({ hostels, onClose }: { hostels: Summary["hostels"]; onClose: (
 }
 
 const roomColumns: Column<RoomRow>[] = [
-  { label: "Room", cell: (r) => <span className="mono">{r.code}</span> },
-  { label: "Hostel", cell: (r) => r.hostel },
-  { label: "Floor", cell: (r) => r.floor ?? "Unknown" },
-  { label: "Policy", cell: (r) => r.gender_policy ?? "Not stated" },
-  { label: "Accessible", cell: (r) => (r.accessible === null ? "Unknown" : r.accessible ? "Yes" : "No") },
-  { label: "Occupied", cell: (r) => `${r.occupied} / ${r.capacity}`, className: "num" },
-  { label: "Free", cell: (r) => r.available, className: "num" },
+  { label: "Room", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
+  { label: "Hostel", sort: "hostel", cell: (r) => r.hostel },
+  { label: "Floor", sort: "floor", cell: (r) => r.floor ?? "Unknown" },
+  { label: "Policy", sort: "policy", cell: (r) => r.gender_policy ?? "Not stated" },
+  { label: "Accessible", sort: "accessible", cell: (r) => (r.accessible === null ? "Unknown" : r.accessible ? "Yes" : "No") },
+  { label: "Occupied", sort: "occupied", cell: (r) => `${r.occupied} / ${r.capacity}`, className: "num" },
+  { label: "Free", sort: "free", cell: (r) => r.available, className: "num" },
 ];
 
 export function Accommodation() {
   const { base, can } = useFest();
-  const [tab, setTab] = useState<"rooms" | "allocations" | "unallocated">("unallocated");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<"map" | "rooms" | "allocations" | "unallocated">(params.get("tab") === "unallocated" ? "unallocated" : "map");
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [hostel, setHostel] = useState("");
   const [freeOnly, setFreeOnly] = useState(false);
+  const [room, setRoom] = useState("");
+  const [sort, setSort] = useState("");
   const [target, setTarget] = useState<string>();
   const [adding, setAdding] = useState<"hostel" | "room" | null>(null);
   const q = useDebounced(search);
-  useEffect(() => setPage(1), [tab, q, hostel, freeOnly]);
+  useEffect(() => setPage(1), [tab, q, hostel, freeOnly, room, sort]);
   const summary = useQuery({ queryKey: ["accommodation-summary", base], queryFn: () => api<Summary>(`${base}/accommodation/summary`) });
-  const rooms = usePaged<RoomRow>(`${base}/accommodation/rooms`, { q, hostel, free_only: freeOnly, page }, tab === "rooms");
-  const allocations = usePaged<AllocationRow>(`${base}/accommodation/allocations`, { q, page }, tab === "allocations");
-  const unallocated = usePaged<Unallocated>(`${base}/accommodation/unallocated`, { page }, tab === "unallocated");
+  const rooms = usePaged<RoomRow>(`${base}/accommodation/rooms`, { q, hostel, free_only: freeOnly, sort, page }, tab === "rooms");
+  const allocations = usePaged<AllocationRow>(`${base}/accommodation/allocations`, { q, room, sort, page }, tab === "allocations");
+  const unallocated = usePaged<Unallocated>(`${base}/accommodation/unallocated`, { sort, page }, tab === "unallocated");
+  const switchTab = (next: typeof tab) => {
+    setTab(next);
+    setSort("");
+    setRoom("");
+  };
   const stay = useAction(({ id, action }: { id: number; action: string }) => api(`${base}/accommodation/allocations/${id}/${action}`, { method: "POST" }), { success: "Recorded" });
   const cancel = useAction((id: number) => api(`${base}/accommodation/allocations/${id}`, { method: "DELETE" }), { success: "Allocation cancelled" });
   const write = can("accommodation.write");
 
   const allocationColumns: Column<AllocationRow>[] = [
-    { label: "Participant", cell: (a) => <><strong>{a.name}</strong> <span className="mono">{a.participant}</span></> },
-    { label: "Room", cell: (a) => <span className="mono">{a.room}</span> },
-    { label: "Status", cell: (a) => <Pill value={a.status} tone={a.status === "checked_in" ? "ok" : undefined} /> },
+    { label: "Participant", sort: "name", cell: (a) => <><strong>{a.name}</strong> <span className="mono">{a.participant}</span></> },
+    { label: "Room", sort: "room", cell: (a) => <span className="mono">{a.room}</span> },
+    { label: "Status", sort: "status", cell: (a) => <Pill value={a.status} tone={a.status === "checked_in" ? "ok" : undefined} /> },
     { label: "Notes", cell: (a) => (a.relaxed_constraints.length ? a.relaxed_constraints.map((r) => RELAXED[r] ?? r).join("; ") : "") },
     ...(write ? [{ label: "Actions", cell: (a: AllocationRow) => (
       <div className="row-actions">
@@ -185,9 +242,9 @@ export function Accommodation() {
     ) }] : []),
   ];
   const unallocatedColumns: Column<Unallocated>[] = [
-    { label: "ID", cell: (p) => <span className="mono">{p.code}</span> },
-    { label: "Name", cell: (p) => <strong>{p.name}</strong> },
-    { label: "College", cell: (p) => p.college },
+    { label: "ID", sort: "code", cell: (p) => <span className="mono">{p.code}</span> },
+    { label: "Name", sort: "name", cell: (p) => <strong>{p.name}</strong> },
+    { label: "College", sort: "college", cell: (p) => p.college },
     { label: "Gender", cell: (p) => (p.restricted ? <span className="restricted">Restricted</span> : p.gender ?? <span className="unknown">Unknown</span>) },
     { label: "Accessibility", cell: (p) => (p.restricted ? <span className="restricted">Restricted</span> : p.accessibility) },
     ...(write ? [{ label: "Actions", cell: (p: Unallocated) => <button className="button-ghost" onClick={(e) => { e.stopPropagation(); setTarget(p.code); }}>Allocate</button> }] : []),
@@ -216,18 +273,20 @@ export function Accommodation() {
           </>
         )}
       </QueryState>
-      <Tabs value={tab} onChange={setTab} options={[["unallocated", "Still need a bed"], ["allocations", "Allocations"], ["rooms", "Rooms"]]} />
-      {tab !== "unallocated" && (
+      <Tabs value={tab} onChange={switchTab} options={[["map", "Room map"], ["unallocated", "Still need a bed"], ["allocations", "Allocations"], ["rooms", "Rooms"]]} />
+      {(tab === "rooms" || tab === "allocations") && (
         <div className="filters">
           <input type="search" aria-label="Search" placeholder={tab === "rooms" ? "Search room" : "Search participant"} value={search} onChange={(e) => setSearch(e.target.value)} />
           {tab === "rooms" && <select aria-label="Hostel" value={hostel} onChange={(e) => setHostel(e.target.value)}><option value="">All hostels</option>{summary.data?.hostels.map((h) => <option key={h.code} value={h.code}>{h.name}</option>)}</select>}
           {tab === "rooms" && <label className="check"><input type="checkbox" checked={freeOnly} onChange={(e) => setFreeOnly(e.target.checked)} /> Free beds only</label>}
+          {tab === "allocations" && room && <button className="chip active" onClick={() => setRoom("")}>Room {room}, clear</button>}
         </div>
       )}
       <ErrorNote error={stay.error || cancel.error} />
-      {tab === "rooms" && <QueryState query={rooms}>{rooms.data && <><DataTable rows={rooms.data.items} columns={roomColumns} rowKey={(r) => r.code} empty="No rooms match." /><Pagination page={rooms.data.page} pages={rooms.data.pages} total={rooms.data.total} onPage={setPage} /></>}</QueryState>}
-      {tab === "allocations" && <QueryState query={allocations}>{allocations.data && <><DataTable rows={allocations.data.items} columns={allocationColumns} rowKey={(a) => a.id} empty="No beds are allocated yet. Preview a plan above." /><Pagination page={allocations.data.page} pages={allocations.data.pages} total={allocations.data.total} onPage={setPage} /></>}</QueryState>}
-      {tab === "unallocated" && <QueryState query={unallocated}>{unallocated.data && <><DataTable rows={unallocated.data.items} columns={unallocatedColumns} rowKey={(p) => p.code} empty="Everyone who needs a bed has one." /><Pagination page={unallocated.data.page} pages={unallocated.data.pages} total={unallocated.data.total} onPage={setPage} /></>}</QueryState>}
+      {tab === "map" && <RoomMap onRoom={(code) => { setTab("allocations"); setRoom(code); setSort(""); }} />}
+      {tab === "rooms" && <QueryState query={rooms}>{rooms.data && <><DataTable rows={rooms.data.items} columns={roomColumns} rowKey={(r) => r.code} empty="No rooms match." sort={sort} onSort={setSort} /><Pagination page={rooms.data.page} pages={rooms.data.pages} total={rooms.data.total} onPage={setPage} /></>}</QueryState>}
+      {tab === "allocations" && <QueryState query={allocations}>{allocations.data && <><DataTable rows={allocations.data.items} columns={allocationColumns} rowKey={(a) => a.id} empty={room ? `Nobody is in ${room}.` : "No beds are allocated yet. Preview a plan above."} sort={sort} onSort={setSort} /><Pagination page={allocations.data.page} pages={allocations.data.pages} total={allocations.data.total} onPage={setPage} /></>}</QueryState>}
+      {tab === "unallocated" && <QueryState query={unallocated}>{unallocated.data && <><DataTable rows={unallocated.data.items} columns={unallocatedColumns} rowKey={(p) => p.code} empty="Everyone who needs a bed has one." sort={sort} onSort={setSort} /><Pagination page={unallocated.data.page} pages={unallocated.data.pages} total={unallocated.data.total} onPage={setPage} /></>}</QueryState>}
       {target && <ManualAllocate code={target} onClose={() => setTarget(undefined)} />}
       {adding === "hostel" && <AddHostel onClose={() => setAdding(null)} />}
       {adding === "room" && summary.data && <AddRoom hostels={summary.data.hostels} onClose={() => setAdding(null)} />}

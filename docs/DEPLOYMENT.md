@@ -84,6 +84,9 @@ stack trace. Send container logs to your log service for alerts.
 
 - Run one API process. Live updates and rate limits are held in memory, so several
   workers would not share them. Move both to Redis or PostgreSQL before scaling out.
+- Camera check-in only works over HTTPS or on localhost, because browsers block the
+  camera elsewhere. Over plain HTTP on a local network, type the pass code or use a USB
+  or Bluetooth QR reader.
 - The load test reached 33 requests a second with 20 concurrent users and no errors, on
   a single machine that was also running the test client. Run
   `python -m scripts.load_test` on your own hardware for real figures.

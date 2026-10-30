@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import {
   type Column, DataTable, Dialog, ErrorNote, Facts, Field, PageHead, Pagination, Pill, QueryState, ReasonForm, Simulated, Tabs, useAction, useFest, usePaged,
@@ -110,47 +111,49 @@ function SponsorForm({ existing, onClose }: { existing?: Sponsor; onClose: () =>
 
 export function Finance() {
   const { base, can } = useFest();
-  const [tab, setTab] = useState<"budgets" | "expenses" | "sponsors">("budgets");
-  const [approval, setApproval] = useState("");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<"budgets" | "expenses" | "sponsors">(params.get("tab") === "expenses" ? "expenses" : "budgets");
+  const [approval, setApproval] = useState(params.get("approval") ?? "");
   const [department, setDepartment] = useState("");
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const [expense, setExpense] = useState<Expense>();
   const [budget, setBudget] = useState<Line>();
   const [sponsor, setSponsor] = useState<Sponsor | "new">();
   const [adding, setAdding] = useState(false);
-  useEffect(() => setPage(1), [approval, department]);
+  useEffect(() => setPage(1), [approval, department, sort]);
   const summary = useQuery({ queryKey: ["finance-summary", base], queryFn: () => api<Summary>(`${base}/finance/summary`) });
-  const expenses = usePaged<Expense>(`${base}/finance/expenses`, { approval, department, page }, tab === "expenses");
+  const expenses = usePaged<Expense>(`${base}/finance/expenses`, { approval, department, sort, page }, tab === "expenses");
   const sponsors = useQuery({ queryKey: ["sponsors", base], queryFn: () => api<Sponsor[]>(`${base}/finance/sponsors`), enabled: tab === "sponsors" });
   const lines = summary.data?.lines ?? [];
 
   const lineColumns: Column<Line>[] = [
-    { label: "Department", cell: (l) => <strong>{l.department}</strong> },
-    { label: "Approved", cell: (l) => formatMoney(l.approved), className: "num" },
-    { label: "Committed", cell: (l) => <>{formatMoney(l.committed)}{Number(l.external_stays) > 0 && <><br /><small className="muted">{formatMoney(l.external_stays)} external stays</small></>}</>, className: "num" },
-    { label: "Pending", cell: (l) => formatMoney(l.pending), className: "num" },
-    { label: "Remaining", cell: (l) => <span className={Number(l.remaining) < 0 ? "over-text" : ""}>{formatMoney(l.remaining)}</span>, className: "num" },
+    { label: "Department", value: (l) => l.department, cell: (l) => <strong>{l.department}</strong> },
+    { label: "Approved", value: (l) => Number(l.approved), cell: (l) => formatMoney(l.approved), className: "num" },
+    { label: "Committed", value: (l) => Number(l.committed), cell: (l) => <>{formatMoney(l.committed)}{Number(l.external_stays) > 0 && <><br /><small className="muted">{formatMoney(l.external_stays)} external stays</small></>}</>, className: "num" },
+    { label: "Pending", value: (l) => Number(l.pending), cell: (l) => formatMoney(l.pending), className: "num" },
+    { label: "Remaining", value: (l) => Number(l.remaining), cell: (l) => <span className={Number(l.remaining) < 0 ? "over-text" : ""}>{formatMoney(l.remaining)}</span>, className: "num" },
     { label: "Used", cell: (l) => { const used = Number(l.approved) ? (Number(l.committed) / Number(l.approved)) * 100 : 0; return <div className="meter-track" role="progressbar" aria-label={`${l.department} budget used`} aria-valuenow={Math.round(Math.min(used, 100))} aria-valuemin={0} aria-valuemax={100}><div className={used > 100 ? "over" : ""} style={{ width: `${Math.min(100, used)}%` }} /></div>; } },
   ];
   const expenseColumns: Column<Expense>[] = [
-    { label: "Expense", cell: (e) => <><strong>{e.description}</strong><br /><small className="muted">{e.category}</small></> },
+    { label: "Expense", sort: "expense", cell: (e) => <><strong>{e.description}</strong><br /><small className="muted">{e.category}</small></> },
     { label: "Department", cell: (e) => e.department },
-    { label: "Estimated", cell: (e) => formatMoney(e.estimated_amount), className: "num" },
-    { label: "Actual", cell: (e) => (e.actual_amount ? formatMoney(e.actual_amount) : ""), className: "num" },
-    { label: "Approval", cell: (e) => <Pill value={e.approval_status} tone={TONE[e.approval_status]} /> },
-    { label: "Payment", cell: (e) => <Pill value={e.payment_status} tone={TONE[e.payment_status]} /> },
+    { label: "Estimated", sort: "estimated", cell: (e) => formatMoney(e.estimated_amount), className: "num" },
+    { label: "Actual", sort: "actual", cell: (e) => (e.actual_amount ? formatMoney(e.actual_amount) : ""), className: "num" },
+    { label: "Approval", sort: "approval", cell: (e) => <Pill value={e.approval_status} tone={TONE[e.approval_status]} /> },
+    { label: "Payment", sort: "payment", cell: (e) => <Pill value={e.payment_status} tone={TONE[e.payment_status]} /> },
   ];
   const sponsorColumns: Column<Sponsor>[] = [
-    { label: "Sponsor", cell: (s) => <strong>{s.name}</strong> },
-    { label: "Tier", cell: (s) => s.tier ?? "" },
-    { label: "Committed", cell: (s) => formatMoney(s.committed_amount), className: "num" },
-    { label: "Received", cell: (s) => formatMoney(s.received_amount), className: "num" },
-    { label: "Outstanding", cell: (s) => formatMoney(s.outstanding), className: "num" },
+    { label: "Sponsor", value: (s) => s.name, cell: (s) => <strong>{s.name}</strong> },
+    { label: "Tier", value: (s) => s.tier, cell: (s) => s.tier ?? "" },
+    { label: "Committed", value: (s) => Number(s.committed_amount), cell: (s) => formatMoney(s.committed_amount), className: "num" },
+    { label: "Received", value: (s) => Number(s.received_amount), cell: (s) => formatMoney(s.received_amount), className: "num" },
+    { label: "Outstanding", value: (s) => Number(s.outstanding), cell: (s) => formatMoney(s.outstanding), className: "num" },
   ];
   const t = summary.data?.totals;
   return (
     <div>
-      <PageHead title="Finance" subtitle="Budgets, expenses and sponsors are simulated. External stay costs come from pack rates.">
+      <PageHead title="Finance" simulated subtitle="Budgets, expenses and sponsors are simulated. External stay costs come from pack rates.">
         {can("finance.write") && <button className="button-ghost" onClick={() => setSponsor("new")}><Plus size={16} /> Add sponsor</button>}
         {can("finance.write") && <button className="button-primary small" onClick={() => setAdding(true)}><Plus size={16} /> Add expense</button>}
       </PageHead>
@@ -174,7 +177,7 @@ export function Finance() {
             <select aria-label="Approval" value={approval} onChange={(e) => setApproval(e.target.value)}><option value="">All approvals</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
             <select aria-label="Department" value={department} onChange={(e) => setDepartment(e.target.value)}><option value="">All departments</option>{lines.map((l) => <option key={l.department}>{l.department}</option>)}</select>
           </div>
-          <QueryState query={expenses}>{expenses.data && <><DataTable rows={expenses.data.items} columns={expenseColumns} rowKey={(e) => e.id} empty="No expenses match." onRow={setExpense} /><Pagination page={expenses.data.page} pages={expenses.data.pages} total={expenses.data.total} onPage={setPage} /></>}</QueryState>
+          <QueryState query={expenses}>{expenses.data && <><DataTable rows={expenses.data.items} columns={expenseColumns} rowKey={(e) => e.id} empty="No expenses match." onRow={setExpense} sort={sort} onSort={setSort} /><Pagination page={expenses.data.page} pages={expenses.data.pages} total={expenses.data.total} onPage={setPage} /></>}</QueryState>
         </>
       )}
       {tab === "sponsors" && <QueryState query={sponsors}>{sponsors.data && <DataTable rows={sponsors.data} columns={sponsorColumns} rowKey={(s) => s.id} empty="No sponsors yet." onRow={can("finance.write") ? setSponsor : undefined} />}</QueryState>}

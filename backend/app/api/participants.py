@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.common import by_code, csv_safe, like, paged
+from app.api.common import by_code, csv_safe, like, ordered, paged
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
 from app.models import (
@@ -108,10 +108,14 @@ def filtered(festival_id: int, q: str | None, college: str | None, contingent: s
 @router.get("/participants", dependencies=[Depends(require("participants.read"))])
 def list_participants(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), college: str | None = None,
                       contingent: str | None = None, accommodation: str | None = None, checkin: str | None = None,
-                      status: str | None = None, event: str | None = None, flagged: bool = False,
+                      status: str | None = None, event: str | None = None, flagged: bool = False, sort: str | None = None,
                       festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
     sensitive = "participants.read_sensitive" in permissions_of(user)
-    query = filtered(festival.id, q, college, contingent, accommodation, checkin, status, event, flagged)
+    query = filtered(festival.id, q, college, contingent, accommodation, checkin, status, event, flagged).order_by(None)
+    events = select(func.count()).where(Registration.participant_id == Participant.id).scalar_subquery()
+    query = ordered(query, sort, {"code": Participant.code, "name": Participant.full_name, "college": Participant.college, "events": events,
+                                  "accommodation": Participant.accommodation_required, "registration": Participant.registration_status,
+                                  "checkin": Participant.checkin_status}, Participant.code)
     result = paged(db, query, page, lambda p: serialize(p, sensitive))
     codes = [row["code"] for row in result["items"]]
     counts = dict(db.execute(select(Participant.code, func.count(Registration.id))

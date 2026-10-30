@@ -3,7 +3,7 @@ import { Download } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { PageHead, QueryState, queryString, Simulated, useFest } from "../components/ui";
+import { PageHead, QueryState, queryString, SectionHead, Simulated, useFest } from "../components/ui";
 import { api } from "../lib/api";
 import { formatLakh, formatMoney, formatNumber } from "../lib/format";
 
@@ -28,12 +28,12 @@ interface Options { events: { code: string; name: string }[]; departments: strin
 const axis = { fill: "var(--muted)", fontSize: 12 };
 const tooltip = {
   contentStyle: { background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: 10, color: "var(--text)" },
-  labelStyle: { color: "var(--text)" }, itemStyle: { color: "var(--text)" }, cursor: { fill: "rgba(252,246,234,.05)" },
+  labelStyle: { color: "var(--text)" }, itemStyle: { color: "var(--text)" }, cursor: { fill: "var(--hover)" },
 };
 const SLICES = ["var(--accent)", "var(--cyan)", "var(--medium)", "var(--high)", "var(--critical)", "var(--ok)", "var(--bar-muted)"];
 
-function Section({ title, simulated, children, wide }: { title: string; simulated?: boolean; children: ReactNode; wide?: boolean }) {
-  return <section className={`panel ${wide ? "wide" : ""}`}><header><h2>{title}</h2>{simulated && <Simulated />}</header>{children}</section>;
+function Section({ title, children, wide }: { title: string; children: ReactNode; wide?: boolean }) {
+  return <section className={`panel ${wide ? "wide" : ""}`}><header><h2>{title}</h2></header>{children}</section>;
 }
 
 function Stats({ items }: { items: [string, string | number][] }) {
@@ -121,14 +121,18 @@ export function Analytics() {
                   })}</div>
                 </Section>
               )}
+              {s.simulations && <Section title="Ripple simulations"><Share label="Simulation outcomes" data={s.simulations.map((a) => ({ name: a.status, value: a.count }))} /></Section>}
+            </div>
+            {(s.departments || s.transport || s.finance || s.incident_priorities) && <SectionHead title="Simulated operations"><Simulated /></SectionHead>}
+            <div className="chart-grid">
               {s.departments && (
-                <Section title="Department performance" simulated>
+                <Section title="Department performance">
                   <div className="meters">{s.departments.filter((d) => d.tasks).map((d) => <div key={d.department} className="meter"><div className="meter-head"><span>{d.department}</span><span className="muted">{d.tasks_done} of {d.tasks} tasks, {d.shifts} shifts</span></div><div className="meter-track"><div style={{ width: `${(d.tasks_done / d.tasks) * 100}%` }} /></div></div>)}</div>
                 </Section>
               )}
-              {s.transport && <Section title="Transportation performance" simulated><Stats items={[["Trips", s.transport.trips], ["Delayed", s.transport.delayed], ["Passengers", s.transport.passengers], ["Seats", s.transport.seats], ["Minutes of delay", s.transport.delay_minutes]]} /></Section>}
+              {s.transport && <Section title="Transportation performance"><Stats items={[["Trips", s.transport.trips], ["Delayed", s.transport.delayed], ["Passengers", s.transport.passengers], ["Seats", s.transport.seats], ["Minutes of delay", s.transport.delay_minutes]]} /></Section>}
               {s.finance && (
-                <Section title="Budget against commitments" simulated>
+                <Section title="Budget against commitments">
                   <ResponsiveContainer width="100%" height={280}>
                     <BarChart data={s.finance.map((f) => ({ department: f.department, approved: Number(f.approved), committed: Number(f.committed) }))} layout="vertical" barGap={1} margin={{ left: 8, right: 12 }}>
                       <XAxis type="number" tick={axis} tickLine={false} axisLine={false} tickFormatter={formatLakh} />
@@ -140,8 +144,7 @@ export function Analytics() {
                   </ResponsiveContainer>
                 </Section>
               )}
-              {s.incident_priorities && <Section title="Incidents by priority" simulated><Share label="Incident priorities" data={s.incident_priorities.map((a) => ({ name: a.priority, value: a.count }))} /></Section>}
-              {s.simulations && <Section title="Ripple simulations"><Share label="Simulation outcomes" data={s.simulations.map((a) => ({ name: a.status, value: a.count }))} /></Section>}
+              {s.incident_priorities && <Section title="Incidents by priority"><Share label="Incident priorities" data={s.incident_priorities.map((a) => ({ name: a.priority, value: a.count }))} /></Section>}
             </div>
             <section className="panel reports">
               <header><h2>Reports</h2><span className="muted small">{search ? "Downloads use the filters above" : "All records"}</span></header>

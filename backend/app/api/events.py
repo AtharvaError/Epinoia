@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.common import by_code, like, paged
+from app.api.common import by_code, like, ordered, paged
 from app.api.participants import DeleteReason
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
@@ -62,7 +62,7 @@ def serialize(e: Event, counts: dict[str, dict[int, int]]) -> dict[str, Any]:
 
 @router.get("", dependencies=[Depends(require("events.read"))])
 def list_events(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), status: str | None = None, venue: str | None = None,
-                day: date | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+                day: date | None = None, sort: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = select(Event).options(joinedload(Event.venue)).where(Event.festival_id == festival.id, Event.deleted_at.is_(None))
     if q:
         query = query.where(or_(Event.code.ilike(like(q), escape="\\"), Event.name.ilike(like(q), escape="\\")))
@@ -73,7 +73,11 @@ def list_events(page: int = Query(1, ge=1), q: str | None = Query(None, max_leng
     if day:
         query = query.where(func.date(func.timezone(festival.timezone, Event.start_at)) == day)
     counts = load(db, festival.id)
-    return paged(db, query.order_by(Event.start_at.nulls_last(), Event.code), page, lambda e: serialize(e, counts))
+    columns = {"code": Event.code, "name": Event.name, "start": Event.start_at, "status": Event.status,
+               "venue": select(Venue.name).where(Venue.id == Event.venue_id).correlate(Event).scalar_subquery(),
+               "registered": select(func.count()).where(Registration.event_id == Event.id).scalar_subquery(),
+               "staffed": select(func.count()).where(VolunteerShift.event_id == Event.id, VolunteerShift.status != "cancelled").scalar_subquery()}
+    return paged(db, ordered(query, sort, columns, Event.start_at.nulls_last(), Event.code), page, lambda e: serialize(e, counts))
 
 
 @router.get("/conflicts", dependencies=[Depends(require("events.read"))])

@@ -96,13 +96,13 @@ function ResourceDialog({ existing, onClose }: { existing?: ResourceRow; onClose
 }
 
 const resourceColumns: Column<ResourceRow>[] = [
-  { label: "ID", cell: (r) => <span className="mono">{r.code}</span> },
-  { label: "Item", cell: (r) => <strong>{r.name}{r.size ? ` (${r.size})` : ""}</strong> },
-  { label: "Location", cell: (r) => r.location ?? "Unknown" },
-  { label: "Total", cell: (r) => r.quantity, className: "num" },
-  { label: "Reserved", cell: (r) => r.reserved_quantity, className: "num" },
-  { label: "Available", cell: (r) => r.available, className: "num" },
-  { label: "Condition", cell: (r) => (r.kind === "merch" ? "Merchandise" : <Pill value={r.condition ?? "unknown"} tone={r.condition === "good" ? "ok" : "warn"} />) },
+  { label: "ID", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
+  { label: "Item", sort: "item", cell: (r) => <strong>{r.name}{r.size ? ` (${r.size})` : ""}</strong> },
+  { label: "Location", sort: "location", cell: (r) => r.location ?? "Unknown" },
+  { label: "Total", sort: "total", cell: (r) => r.quantity, className: "num" },
+  { label: "Reserved", sort: "reserved", cell: (r) => r.reserved_quantity, className: "num" },
+  { label: "Available", sort: "available", cell: (r) => r.available, className: "num" },
+  { label: "Condition", sort: "condition", cell: (r) => (r.kind === "merch" ? "Merchandise" : <Pill value={r.condition ?? "unknown"} tone={r.condition === "good" ? "ok" : "warn"} />) },
 ];
 
 export function Venues() {
@@ -114,11 +114,12 @@ export function Venues() {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("");
   const [condition, setCondition] = useState("");
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const q = useDebounced(search);
-  useEffect(() => setPage(1), [q, kind, condition]);
+  useEffect(() => setPage(1), [q, kind, condition, sort]);
   const venues = useQuery({ queryKey: ["venues", base], queryFn: () => api<VenueRow[]>(`${base}/venues`) });
-  const resources = usePaged<ResourceRow>(`${base}/resources`, { q, kind, condition, page }, tab === "resources");
+  const resources = usePaged<ResourceRow>(`${base}/resources`, { q, kind, condition, sort, page }, tab === "resources");
   const venue = venues.data?.find((v) => v.code === selected);
   return (
     <div>
@@ -150,7 +151,7 @@ export function Venues() {
             <select aria-label="Condition" value={condition} onChange={(e) => setCondition(e.target.value)}><option value="">Any condition</option><option value="good">Good</option><option value="needs check">Needs check</option><option value="under repair">Under repair</option></select>
           </div>
           <QueryState query={resources}>
-            {resources.data && (<><DataTable rows={resources.data.items} columns={resourceColumns} rowKey={(r) => r.code} empty="No resources match these filters." onRow={can("venues.write") ? setResource : undefined} /><Pagination page={resources.data.page} pages={resources.data.pages} total={resources.data.total} onPage={setPage} /></>)}
+            {resources.data && (<><DataTable rows={resources.data.items} columns={resourceColumns} rowKey={(r) => r.code} empty="No resources match these filters." onRow={can("venues.write") ? setResource : undefined} sort={sort} onSort={setSort} /><Pagination page={resources.data.page} pages={resources.data.pages} total={resources.data.total} onPage={setPage} /></>)}
           </QueryState>
         </>
       )}

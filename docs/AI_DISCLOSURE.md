@@ -37,7 +37,8 @@ Add any decisions your team made that are not listed here.
   and a failed commit leaves nothing behind.
 - The AI also ran the main flows in a real browser, which found problems tests missed,
   including a crash and layouts that broke on tablets. Have your team try it too.
-- axe-core accessibility checks on every page at tablet and phone width.
+- axe-core accessibility checks on every page at tablet and phone width, and again in
+  both themes on desktop.
 - A load test with 20 concurrent users, and a backup restored into a separate database
   and compared table by table.
 - Dependencies checked against known vulnerability databases.
@@ -46,6 +47,8 @@ Add any decisions your team made that are not listed here.
 
 - The live Claude API path has never run against the real service. Its logic was tested
   with a simulated client.
+- Camera check-in was tested with a simulated video feed showing real pass QR codes, not
+  on a physical phone. Try it on the phones you will use, in the light you will have.
 - Simulated records are invented, so results built on them show how the system behaves,
   not real festival outcomes.
 - The schedule is generated, and 2,024 registrations still fall outside participants' stays.

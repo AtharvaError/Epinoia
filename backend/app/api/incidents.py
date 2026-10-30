@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.common import by_code, paged
+from app.api.common import by_code, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import AuditLog, Festival, Incident, User
@@ -43,7 +43,7 @@ def row(i: Incident) -> dict[str, Any]:
 
 
 @router.get("", dependencies=[Depends(require("incidents.read"))])
-def list_incidents(page: int = Query(1, ge=1), status: str | None = None, priority: str | None = None, open_only: bool = False, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+def list_incidents(page: int = Query(1, ge=1), status: str | None = None, priority: str | None = None, open_only: bool = False, sort: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = select(Incident).where(Incident.festival_id == festival.id)
     if status:
         query = query.where(Incident.status == status)
@@ -51,7 +51,9 @@ def list_incidents(page: int = Query(1, ge=1), status: str | None = None, priori
         query = query.where(Incident.priority == priority)
     if open_only:
         query = query.where(Incident.status.not_in(("resolved", "closed")))
-    return paged(db, query.order_by(func.array_position(list(reversed(PRIORITIES)), Incident.priority), Incident.reported_at.desc()), page, row)
+    urgency = func.array_position(list(reversed(PRIORITIES)), Incident.priority)
+    columns = {"code": Incident.code, "priority": urgency, "status": Incident.status, "team": Incident.assigned_team, "reported": Incident.reported_at}
+    return paged(db, ordered(query, sort, columns, urgency, Incident.reported_at.desc()), page, row)
 
 
 @router.get("/summary", dependencies=[Depends(require("incidents.read"))])

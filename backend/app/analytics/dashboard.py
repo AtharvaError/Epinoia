@@ -1,11 +1,15 @@
 """Command Center metrics. Everything is computed from database rows at request time."""
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+from urllib.parse import urlencode
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.models import Festival
+from app.models import Event, Festival, Venue
+from app.services.events import outside_venue_hours, venue_conflicts
+from app.services.pack_import import IST
+from app.services.schedule_plan import SUITABLE_VENUES, TURNAROUND
 
 
 def _one(db: Session, sql: str, **params: Any) -> Any:
@@ -33,7 +37,7 @@ UNALLOCATED = """
     WHERE p.festival_id=:f AND p.deleted_at IS NULL AND p.accommodation_required IS TRUE
       AND NOT EXISTS (SELECT 1 FROM accommodation_allocations a WHERE a.participant_id=p.id AND a.status<>'cancelled')"""
 EVENT_LOAD = """
-    SELECT e.id, e.code, e.name, e.status, e.volunteers_needed, v.name AS venue, v.capacity,
+    SELECT e.id, e.code, e.name, e.status, e.volunteers_needed, v.code AS venue_code, v.name AS venue, v.capacity,
            (SELECT count(*) FROM registrations r WHERE r.event_id=e.id) AS registered,
            (SELECT count(*) FROM volunteer_shifts s WHERE s.event_id=e.id AND s.status<>'cancelled') AS staffed
     FROM events e LEFT JOIN venues v ON v.id=e.venue_id
@@ -53,6 +57,16 @@ VENUE_CLASHES = """
     SELECT count(*) FROM events a JOIN events b ON a.venue_id=b.venue_id AND a.id<b.id
     WHERE a.festival_id=:f AND a.deleted_at IS NULL AND b.deleted_at IS NULL
       AND a.start_at<b.end_at AND b.start_at<a.end_at"""
+WORST_VENUE_CLASH = """
+    SELECT b.code, b.name FROM events a JOIN events b ON a.venue_id=b.venue_id AND a.id<b.id
+    WHERE a.festival_id=:f AND a.deleted_at IS NULL AND b.deleted_at IS NULL
+      AND a.start_at<b.end_at AND b.start_at<a.end_at ORDER BY b.code LIMIT 1"""
+WORST_OFF_CAMPUS = """
+    SELECT e.code, e.name, count(*) AS away, v.code AS venue_code, e.start_at, e.end_at
+    FROM registrations r JOIN participants p ON p.id=r.participant_id JOIN events e ON e.id=r.event_id JOIN venues v ON v.id=e.venue_id
+    WHERE r.festival_id=:f AND e.deleted_at IS NULL AND p.deleted_at IS NULL
+      AND p.departure_at >= p.arrival_at AND (p.arrival_at > e.start_at OR p.departure_at < e.end_at)
+    GROUP BY e.id, v.code ORDER BY away DESC, e.code LIMIT 1"""
 
 
 def kpis(db: Session, f: int, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -76,43 +90,105 @@ def kpis(db: Session, f: int, events: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
+FIXES_TRIED = 3
+
+
+def link(label: str, path: str, permission: str, **params: Any) -> dict[str, str]:
+    """What to do about an alert. The page reads the query string and fills itself in."""
+    return {"label": label, "to": f"{path}?{urlencode(params)}" if params else path, "permission": permission}
+
+
+def simulate(label: str, scenario: str, **change: Any) -> dict[str, str]:
+    return link(label, "/ripple", "simulation.run", scenario=scenario, **{k: v for k, v in change.items() if v is not None})
+
+
+def to_form(moment: datetime) -> str:
+    return moment.astimezone(IST).strftime("%Y-%m-%dT%H:%M")
+
+
+def roomier_venue(db: Session, f: int, code: str, registered: int, free: bool = True) -> Venue | None:
+    """The smallest suitable venue that seats everyone, and is free if asked. Ripple judges it fully."""
+    event = db.scalar(select(Event).where(Event.festival_id == f, Event.code == code))
+    if not event or not event.start_at:
+        return None
+    suitable = SUITABLE_VENUES.get(event.venue_requirements or "")
+    venues = db.scalars(select(Venue).where(Venue.festival_id == f, Venue.maintenance_status == "operational", Venue.capacity >= registered,
+                                            Venue.id != event.venue_id).order_by(Venue.capacity))
+    for venue in venues:
+        if suitable is not None and venue.name not in suitable:
+            continue
+        if not free or not (outside_venue_hours(venue, event.start_at, event.end_at)
+                            or venue_conflicts(db, f, venue.id, event.start_at - TURNAROUND, event.end_at + TURNAROUND, event.id)):
+            return venue
+    return None
+
+
 def alerts(db: Session, f: int, festival: Festival, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
 
-    def add(severity: str, module: str, title: str, detail: str, source: str) -> None:
-        found.append({"severity": severity, "module": module, "title": title, "detail": detail, "source": source})
+    def add(severity: str, module: str, title: str, detail: str, source: str, action: dict[str, str] | None = None) -> None:
+        found.append({"severity": severity, "module": module, "title": title, "detail": detail, "source": source, "action": action})
+
+    pending = _rows(db, "SELECT simulation_id FROM change_approvals WHERE festival_id=:f AND status='pending' ORDER BY id", f=f)
+    if pending:
+        add("high", "Ripple", f"{len(pending)} {'change waits' if len(pending) == 1 else 'changes wait'} for approval", "Each was simulated and needs a decision before it is applied.", "generated",
+            link("Review the change", "/ripple", "simulation.run", simulation=pending[0]["simulation_id"]))
+
+    urgent = _one(db, "SELECT count(*) FROM incidents WHERE festival_id=:f AND status NOT IN ('resolved','closed') AND priority IN ('critical','high')", f=f)
+    if urgent:
+        add("critical", "Safety", f"{urgent} high-priority {'incident is' if urgent == 1 else 'incidents are'} open", "They need a response team and a named owner.", "simulated", link("Open incidents", "/safety", "incidents.read"))
 
     over = [e for e in events if e["capacity"] is not None and e["registered"] > e["capacity"]]
     if over:
-        worst = max(over, key=lambda e: e["registered"] - e["capacity"])
+        by_gap = sorted(over, key=lambda e: e["capacity"] - e["registered"])
+        worst = by_gap[0]
+        # ponytail: checks only the worst few to bound the queries here; Ripple can try any event.
+        fix = next(((e, v) for e in by_gap[:FIXES_TRIED] if (v := roomier_venue(db, f, e["code"], e["registered"]))), None)
+        if fix:
+            detail = f" {fix[0]['name']} can move to {fix[1].name}, which seats {fix[1].capacity} and is free."
+        else:
+            fix = next(((e, v) for e in by_gap if (v := roomier_venue(db, f, e["code"], e["registered"], free=False))), (worst, None))
+            detail = f" {fix[1].name} seats all of {fix[0]['name']} but is booked then, so simulate the clash." if fix[1] else " No suitable venue seats everyone."
         add("critical", "Venues", f"{len(over)} events exceed venue capacity",
-            f"Worst is {worst['name']}: {worst['registered']} registered, {worst['capacity']} seats at {worst['venue']}.", "generated")
+            f"Worst is {worst['name']}: {worst['registered']} registered, {worst['capacity']} seats at {worst['venue']}.{detail}", "generated",
+            simulate(f"Simulate moving {fix[0]['name']}", "venue_change", event_code=fix[0]["code"], venue_code=fix[1].code if fix[1] else None))
 
     clashes = _one(db, CLASHES, f=f)
     if clashes:
-        add("high", "Events", f"{clashes} participants have overlapping events", "They are registered for events that run at the same time.", "generated")
+        add("high", "Events", f"{clashes} participants have overlapping events", "They are registered for events that run at the same time.", "generated",
+            link("See the clashes", "/events", "events.read", tab="conflicts"))
 
     off_campus = _one(db, OFF_CAMPUS, f=f)
     if off_campus:
+        worst_stay = _rows(db, WORST_OFF_CAMPUS, f=f)
+        action = None
+        if worst_stay:
+            e = worst_stay[0]
+            action = simulate(f"Try a new time for {e['name']}", "venue_change", event_code=e["code"], venue_code=e["venue_code"], start_at=to_form(e["start_at"]), end_at=to_form(e["end_at"]))
         add("critical", "Events", f"{off_campus:,} registrations fall outside the participant's stay",
-            "They arrive after the event starts or leave before it ends, so they would miss all or part of it.", "generated")
+            "They arrive after the event starts or leave before it ends, so they would miss all or part of it."
+            + (f" {worst_stay[0]['name']} loses the most, {worst_stay[0]['away']:,}." if worst_stay else ""), "generated", action)
 
     double_booked = _one(db, VENUE_CLASHES, f=f)
     if double_booked:
-        add("critical", "Venues", f"{double_booked} venue double-bookings", "Two events share a venue at the same time.", "generated")
+        clash = _rows(db, WORST_VENUE_CLASH, f=f)[0]
+        add("critical", "Venues", f"{double_booked} venue double-bookings", "Two events share a venue at the same time.", "generated",
+            simulate(f"Move {clash['name']}", "venue_change", event_code=clash["code"]))
 
     unallocated, beds = _one(db, UNALLOCATED, f=f), _one(db, BEDS, f=f)
     occupied = _one(db, OCCUPIED, f=f)
     if unallocated:
         free = beds - occupied
         detail = f"{free:,} beds are free, so {unallocated - free:,} people have no bed even if every bed is used." if unallocated > free else f"{free:,} beds are free."
-        add("critical" if unallocated > free else "high", "Accommodation", f"{unallocated:,} participants need a bed allocated", detail, "pack")
+        add("critical" if unallocated > free else "high", "Accommodation", f"{unallocated:,} participants need a bed allocated", detail, "pack",
+            link("Open the room map", "/accommodation", "accommodation.read"))
 
     accessible = _one(db, "SELECT coalesce(sum(capacity),0) FROM rooms WHERE festival_id=:f AND accessible IS TRUE", f=f)
     needing = _one(db, "SELECT count(*) FROM participants WHERE festival_id=:f AND deleted_at IS NULL AND accommodation_required IS TRUE AND accessibility_needs IS NOT NULL AND accessibility_needs<>'None'", f=f)
     if needing > accessible:
         add("critical", "Accommodation", f"{needing} accessibility needs, {accessible} accessible beds",
-            "Accessibility is a hard constraint. Some needs may be met by ground-floor rooms, which needs a human decision.", "pack")
+            "Accessibility is a hard constraint. Some needs may be met by ground-floor rooms, which needs a human decision.", "pack",
+            link("See who needs a bed", "/accommodation", "accommodation.read", tab="unallocated"))
 
     expired = _one(db, "SELECT count(*) FROM vendors WHERE festival_id=:f AND hygiene_certificate_expiry < :d", f=f, d=festival.start_date)
     expiring = _one(db, "SELECT count(*) FROM vendors WHERE festival_id=:f AND hygiene_certificate_expiry BETWEEN :d AND :e", f=f, d=festival.start_date, e=festival.end_date)
@@ -123,15 +199,24 @@ def alerts(db: Session, f: int, festival: Festival, events: list[dict[str, Any]]
     short = [e for e in events if e["staffed"] < e["volunteers_needed"]]
     if short:
         gap = sum(e["volunteers_needed"] - e["staffed"] for e in short)
-        add("medium", "Volunteers", f"{len(short)} events are understaffed", f"{gap} volunteer shifts are unfilled.", "simulated")
+        add("medium", "Volunteers", f"{len(short)} events are understaffed", f"{gap} volunteer shifts are unfilled.", "simulated",
+            link("Find replacements", "/volunteers", "volunteers.read", tab="understaffed"))
 
-    delayed = _rows(db, "SELECT r.name, count(t.id) AS riders FROM routes r LEFT JOIN transport_assignments t ON t.route_id=r.id WHERE r.festival_id=:f AND r.status='delayed' GROUP BY r.id", f=f)
+    awaiting = _one(db, "SELECT count(*) FROM expenses WHERE festival_id=:f AND deleted_at IS NULL AND approval_status='pending'", f=f)
+    if awaiting:
+        add("medium", "Finance", f"{awaiting} expenses wait for approval", "Spending stays uncommitted until a decision is made.", "simulated",
+            link("Review expenses", "/finance", "finance.read", tab="expenses", approval="pending"))
+
+    delayed = _rows(db, """SELECT r.code, r.name, count(t.id) AS riders FROM routes r LEFT JOIN transport_assignments t ON t.route_id=r.id
+                           WHERE r.festival_id=:f AND r.status='delayed' GROUP BY r.id""", f=f)
     for route in delayed:
-        add("high", "Transport", f"{route['name']} is delayed", f"{route['riders']} passengers assigned.", "simulated")
+        add("high", "Transport", f"{route['name']} is delayed", f"{route['riders']} passengers assigned.", "simulated",
+            simulate("Simulate 30 more minutes", "bus_delay", route_code=route["code"], minutes=30))
 
     unknown = _one(db, "SELECT count(*) FROM data_issues WHERE festival_id=:f AND status='open' AND issue IN ('missing_gender','missing_dietary')", f=f)
     if unknown:
-        add("medium", "Participants", f"{unknown} records have unknown gender or dietary needs", "Blanks are treated as unknown and need a person to confirm.", "pack")
+        add("medium", "Participants", f"{unknown} records have unknown gender or dietary needs", "Blanks are treated as unknown and need a person to confirm.", "pack",
+            link("Review records", "/participants", "participants.read", flagged=1))
 
     order = {"critical": 0, "high": 1, "medium": 2}
     return sorted(found, key=lambda a: order[a["severity"]])

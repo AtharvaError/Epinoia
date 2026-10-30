@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarPlus } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Activity, CalendarPlus } from "lucide-react";
+import { type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
-  type Column, DataTable, Dialog, ErrorNote, Facts, Field, Loading, PageHead, Pagination, Pill, QueryState, ReasonForm, Tabs,
+  type Column, DataTable, Dialog, ErrorNote, Facts, Field, Loading, PageHead, Pagination, Pill, QueryState, queryString, ReasonForm, Tabs,
   fromInput, toInput, useAction, useDebounced, useFest, usePaged,
 } from "../components/ui";
 import { api, ApiError } from "../lib/api";
@@ -32,10 +32,13 @@ interface Schedule { venues: { code: string; name: string; capacity: number }[];
 const STATUS_TONE: Record<string, "ok" | "warn" | "bad" | "info"> = { live: "ok", completed: "info", postponed: "warn", cancelled: "bad" };
 const DAY_START = 8;
 const DAY_HOURS = 14;
+const SNAP_PER_HOUR = 4;
+const DRAG_THRESHOLD = 5;
 const istHours = (iso: string) => {
   const d = new Date(new Date(iso).getTime() + 5.5 * 3600 * 1000);
   return d.getUTCHours() + d.getUTCMinutes() / 60;
 };
+const clock = (hours: number) => `${String(Math.floor(hours)).padStart(2, "0")}:${String(Math.round((hours % 1) * 60)).padStart(2, "0")}`;
 
 function EventForm({ existing, options, onDone }: { existing?: EventRow; options: Options; onDone: () => void }) {
   const { base } = useFest();
@@ -97,6 +100,7 @@ function EventDrawer({ code, options, onClose }: { code: string; options?: Optio
             <div className="row-actions">
               <Pill value={e.status} tone={STATUS_TONE[e.status]} />
               {e.schedule_source === "generated" && <span className="source source-generated">Generated</span>}
+              {can("simulation.run") && <Link className="button-ghost" to={`/ripple${queryString({ scenario: "venue_change", event_code: e.code, venue_code: e.venue?.code })}`}><Activity size={14} aria-hidden="true" /> Simulate a change</Link>}
               {can("events.write") && <><button className="button-ghost" onClick={() => setView("edit")}>Edit</button><button className="button-ghost danger" onClick={() => setView("delete")}>Delete</button></>}
             </div>
             {over && <p className="form-error">{e.registered} are registered and {e.venue!.name} has {e.venue!.capacity} seats.</p>}
@@ -117,12 +121,54 @@ function EventDrawer({ code, options, onClose }: { code: string; options?: Optio
   );
 }
 
+interface Drag { code: string; hours: number; venue: string; offsetY: number }
+
 function DaySchedule({ onOpen }: { onOpen: (code: string) => void }) {
-  const { base, festival } = useFest();
+  const { base, festival, can } = useFest();
+  const navigate = useNavigate();
   const days: string[] = [];
   for (const d = new Date(`${festival.start_date}T00:00:00Z`); d <= new Date(`${festival.end_date}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) days.push(d.toISOString().slice(0, 10));
   const [day, setDay] = useState(days[0]);
+  const [drag, setDrag] = useState<Drag>();
+  const dragged = useRef(false);
   const query = useQuery({ queryKey: ["schedule", base, day], queryFn: () => api<Schedule>(`${base}/events/schedule?day=${day}`) });
+
+  // Dropping never changes the schedule. It opens Ripple, which shows the impact first.
+  const startDrag = (pointer: ReactPointerEvent<HTMLButtonElement>, event: EventRow, venue: string) => {
+    if (!can("simulation.run") || pointer.button !== 0 || pointer.pointerType === "touch") return; // Touch scrolls the timeline. The event drawer offers the same simulation.
+    const hourWidth = pointer.currentTarget.parentElement!.getBoundingClientRect().width / DAY_HOURS;
+    const { clientX: startX, clientY: startY } = pointer;
+    const from = istHours(event.start_at!);
+    const length = (new Date(event.end_at!).getTime() - new Date(event.start_at!).getTime()) / 3600000;
+    let latest: Drag = { code: event.code, hours: from, venue, offsetY: 0 };
+    dragged.current = false;
+    const move = (e: PointerEvent) => {
+      if (!dragged.current && Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD) return;
+      dragged.current = true;
+      const snapped = Math.round((from + (e.clientX - startX) / hourWidth) * SNAP_PER_HOUR) / SNAP_PER_HOUR;
+      const hours = Math.min(DAY_START + DAY_HOURS - length, Math.max(DAY_START, snapped));
+      const row = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-venue]");
+      latest = { ...latest, hours, venue: row?.dataset.venue ?? latest.venue, offsetY: e.clientY - startY };
+      setDrag(latest);
+    };
+    const end = (e: PointerEvent) => {
+      if (e.type === "pointerup") move(e);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      setDrag(undefined);
+      if (e.type !== "pointerup" || (latest.hours === from && latest.venue === venue)) return;
+      const shift = (latest.hours - from) * 3600000;
+      navigate(`/ripple${queryString({
+        scenario: "venue_change", event_code: event.code, venue_code: latest.venue, run: 1,
+        start_at: toInput(new Date(new Date(event.start_at!).getTime() + shift).toISOString()), end_at: toInput(new Date(new Date(event.end_at!).getTime() + shift).toISOString()),
+      })}`);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   return (
     <>
       <div className="filters">{days.map((d, i) => <button key={d} className={d === day ? "chip active" : "chip"} onClick={() => setDay(d)}>Day {i + 1}, {d.slice(8)} {new Date(`${d}T00:00:00Z`).toLocaleString("en-IN", { month: "short", timeZone: "UTC" })}</button>)}</div>
@@ -133,13 +179,18 @@ function DaySchedule({ onOpen }: { onOpen: (code: string) => void }) {
             {query.data.venues.map((v) => (
               <div key={v.code} className="timeline-row" role="row">
                 <span role="rowheader"><strong>{v.name}</strong><small>{v.capacity} seats</small></span>
-                <div className="timeline-track">
+                <div className={`timeline-track ${drag?.venue === v.code ? "drop" : ""}`} data-venue={v.code}>
                   {query.data.events.filter((e) => e.venue?.code === v.code && e.start_at && e.end_at).map((e) => {
-                    const start = Math.max(0, istHours(e.start_at!) - DAY_START);
+                    const moving = drag?.code === e.code ? drag : undefined;
+                    const start = Math.max(0, (moving?.hours ?? istHours(e.start_at!)) - DAY_START);
                     const width = Math.min(DAY_HOURS - start, (new Date(e.end_at!).getTime() - new Date(e.start_at!).getTime()) / 3600000);
                     return (
-                      <button key={e.code} className={e.registered > v.capacity ? "block over" : "block"} style={{ left: `${(start * 100) / DAY_HOURS}%`, width: `${(width * 100) / DAY_HOURS}%` }}
-                              title={`${e.name}: ${formatTime(e.start_at!)}, ${e.registered} registered`} onClick={() => onOpen(e.code)}>{e.name}</button>
+                      <button key={e.code} className={`block ${e.registered > v.capacity ? "over" : ""} ${moving ? "dragging" : ""}`}
+                              style={{ left: `${(start * 100) / DAY_HOURS}%`, width: `${(width * 100) / DAY_HOURS}%`, transform: moving ? `translateY(${moving.offsetY}px)` : undefined }}
+                              title={`${e.name}: ${formatTime(e.start_at!)}, ${e.registered} registered`} onPointerDown={(p) => startDrag(p, e, v.code)}
+                              onClick={() => { if (!dragged.current) onOpen(e.code); dragged.current = false; }}>
+                        {moving ? `${clock(moving.hours)} ${e.name}` : e.name}
+                      </button>
                     );
                   })}
                 </div>
@@ -148,7 +199,7 @@ function DaySchedule({ onOpen }: { onOpen: (code: string) => void }) {
           </div>
         )}
       </QueryState>
-      <p className="muted small">Red blocks have more registrants than seats. Each event runs all its rounds in this slot, as stated in the assumptions log.</p>
+      <p className="muted small">{can("simulation.run") && "Drag a block to a new time or venue to see what it would break. Nothing changes until it is approved. "}Red blocks have more registrants than seats. Each event runs all its rounds in this slot, as stated in the assumptions log.</p>
     </>
   );
 }
@@ -177,27 +228,28 @@ function ConflictList({ onOpen }: { onOpen: (code: string) => void }) {
 }
 
 const columns: Column<EventRow>[] = [
-  { label: "ID", cell: (e) => <span className="mono">{e.code}</span> },
-  { label: "Event", cell: (e) => <strong>{e.name}</strong> },
-  { label: "Starts", cell: (e) => (e.start_at ? formatTime(e.start_at) : "Not scheduled") },
-  { label: "Venue", cell: (e) => e.venue?.name ?? "Not assigned" },
-  { label: "Registered", cell: (e) => <span className={e.venue && e.registered > e.venue.capacity ? "over-text" : ""}>{e.registered}{e.venue ? ` / ${e.venue.capacity}` : ""}</span>, className: "num" },
-  { label: "Volunteers", cell: (e) => <span className={e.staffed < e.volunteers_needed ? "warn-text" : ""}>{e.staffed} / {e.volunteers_needed}</span>, className: "num" },
-  { label: "Status", cell: (e) => <Pill value={e.status} tone={STATUS_TONE[e.status]} /> },
+  { label: "ID", sort: "code", cell: (e) => <span className="mono">{e.code}</span> },
+  { label: "Event", sort: "name", cell: (e) => <strong>{e.name}</strong> },
+  { label: "Starts", sort: "start", cell: (e) => (e.start_at ? formatTime(e.start_at) : "Not scheduled") },
+  { label: "Venue", sort: "venue", cell: (e) => e.venue?.name ?? "Not assigned" },
+  { label: "Registered", sort: "registered", cell: (e) => <span className={e.venue && e.registered > e.venue.capacity ? "over-text" : ""}>{e.registered}{e.venue ? ` / ${e.venue.capacity}` : ""}</span>, className: "num" },
+  { label: "Volunteers", sort: "staffed", cell: (e) => <span className={e.staffed < e.volunteers_needed ? "warn-text" : ""}>{e.staffed} / {e.volunteers_needed}</span>, className: "num" },
+  { label: "Status", sort: "status", cell: (e) => <Pill value={e.status} tone={STATUS_TONE[e.status]} /> },
 ];
 
 export function Events() {
   const { base, can } = useFest();
   const [params, setParams] = useSearchParams();
-  const [tab, setTab] = useState<"list" | "schedule" | "conflicts">("list");
+  const [tab, setTab] = useState<"list" | "schedule" | "conflicts">(params.get("tab") === "conflicts" ? "conflicts" : "list");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [venue, setVenue] = useState("");
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const q = useDebounced(search);
-  useEffect(() => setPage(1), [q, status, venue]);
-  const query = usePaged<EventRow>(`${base}/events`, { q, status, venue, page });
+  useEffect(() => setPage(1), [q, status, venue, sort]);
+  const query = usePaged<EventRow>(`${base}/events`, { q, status, venue, sort, page });
   const options = useQuery({ queryKey: ["event-options", base], queryFn: () => api<Options>(`${base}/events/options`) });
   const open = (code: string) => setParams({ open: code });
   const opened = params.get("open");
@@ -215,7 +267,7 @@ export function Events() {
             <select aria-label="Venue" value={venue} onChange={(e) => setVenue(e.target.value)}><option value="">All venues</option>{options.data?.venues.map((v) => <option key={v.code} value={v.code}>{v.name}</option>)}</select>
           </div>
           <QueryState query={query}>
-            {query.data && (<><DataTable rows={query.data.items} columns={columns} rowKey={(e) => e.code} empty="No events match these filters." onRow={(e) => open(e.code)} /><Pagination page={query.data.page} pages={query.data.pages} total={query.data.total} onPage={setPage} /></>)}
+            {query.data && (<><DataTable rows={query.data.items} columns={columns} rowKey={(e) => e.code} empty="No events match these filters." onRow={(e) => open(e.code)} sort={sort} onSort={setSort} /><Pagination page={query.data.page} pages={query.data.pages} total={query.data.total} onPage={setPage} /></>)}
           </QueryState>
         </>
       )}

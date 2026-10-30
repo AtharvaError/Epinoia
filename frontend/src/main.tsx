@@ -17,6 +17,7 @@ function page<K extends string>(load: () => Promise<Record<K, ComponentType>>, n
 
 const Accommodation = page(() => import("./pages/Accommodation"), "Accommodation");
 const Analytics = page(() => import("./pages/Analytics"), "Analytics");
+const CheckIn = page(() => import("./pages/CheckIn"), "CheckIn");
 const CommandCenter = page(() => import("./pages/CommandCenter"), "CommandCenter");
 const Communication = page(() => import("./pages/Communication"), "Communication");
 const Events = page(() => import("./pages/Events"), "Events");
@@ -29,6 +30,12 @@ const Settings = page(() => import("./pages/Settings"), "Settings");
 const Transport = page(() => import("./pages/Transport"), "Transport");
 const Venues = page(() => import("./pages/Venues"), "Venues");
 const Volunteers = page(() => import("./pages/Volunteers"), "Volunteers");
+
+try {
+  document.documentElement.dataset.theme = localStorage.getItem("festos.theme") ?? "night";
+} catch {
+  document.documentElement.dataset.theme = "night";
+}
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -49,6 +56,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/login" element={<Suspense fallback={<div className="splash" role="status">Loading FestOS Command</div>}><Login /></Suspense>} />
           <Route element={<Protected />}>
             <Route index element={<CommandCenter />} />
+            <Route path="check-in" element={<CheckIn />} />
             <Route path="events" element={<Events />} />
             <Route path="participants" element={<Participants />} />
             <Route path="accommodation" element={<Accommodation />} />

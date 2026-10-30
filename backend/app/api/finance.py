@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.common import paged
+from app.api.common import ordered, paged
 from app.api.participants import DeleteReason
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
@@ -92,7 +92,7 @@ def set_budget(name: str, body: BudgetIn, festival: Festival = Depends(festival_
 
 
 @router.get("/expenses", dependencies=[Depends(require("finance.read"))])
-def list_expenses(page: int = Query(1, ge=1), department_name: str | None = Query(None, alias="department"), approval: str | None = None, payment: str | None = None,
+def list_expenses(page: int = Query(1, ge=1), department_name: str | None = Query(None, alias="department"), approval: str | None = None, payment: str | None = None, sort: str | None = None,
                   festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = select(Expense).where(Expense.festival_id == festival.id, Expense.deleted_at.is_(None))
     if department_name:
@@ -102,7 +102,9 @@ def list_expenses(page: int = Query(1, ge=1), department_name: str | None = Quer
     if payment:
         query = query.where(Expense.payment_status == payment)
     names = department_names(db, festival.id)
-    return paged(db, query.order_by(Expense.id.desc()), page, lambda e: expense_row(e, names))
+    columns = {"expense": Expense.description, "estimated": Expense.estimated_amount, "actual": Expense.actual_amount,
+               "approval": Expense.approval_status, "payment": Expense.payment_status}
+    return paged(db, ordered(query, sort, columns, Expense.id.desc()), page, lambda e: expense_row(e, names))
 
 
 @router.post("/expenses", status_code=201, dependencies=[Depends(require("finance.write"))])

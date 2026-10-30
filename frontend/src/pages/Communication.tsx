@@ -74,11 +74,12 @@ export function Communication() {
         <QueryState query={list}>
           {list.data && (
             <>
+              {list.data.items.some((a) => a.is_simulated) && <p className="small muted"><Simulated /> Seeded announcements are demo data. New ones are real.</p>}
               {list.data.items.length ? (
                 <ul className="announcements">
                   {list.data.items.map((a) => (
                     <li key={a.id} className="panel">
-                      <header><h2>{a.title}</h2>{a.is_simulated && <Simulated />}</header>
+                      <header><h2>{a.title}</h2></header>
                       <p>{a.body}</p>
                       <p className="muted small">{a.created_by ?? "System"}, {formatTime(a.created_at)}. To {a.audience_type === "festival" ? "everyone" : a.audience_ref}. {a.recipients} sent, {a.read} read, {a.acknowledged} acknowledged.</p>
                     </li>

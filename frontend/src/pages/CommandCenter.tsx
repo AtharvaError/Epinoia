@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { Activity, ArrowRight } from "lucide-react";
 import { type ReactNode } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, Navigate, useOutletContext } from "react-router-dom";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 
+import { Moment, SectionHead } from "../components/ui";
 import { api, ApiError, type Alert, type Dashboard, type Festival, type Kpi, type Source, type User } from "../lib/api";
 import { formatLakh, formatMoney, formatNumber, formatTime } from "../lib/format";
 
@@ -24,7 +26,13 @@ const tooltip = {
   contentStyle: { background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: 10, color: "var(--text)" },
   labelStyle: { color: "var(--text)" },
   itemStyle: { color: "var(--text)" },
-  cursor: { fill: "rgba(252,246,234,.05)" },
+  cursor: { fill: "var(--hover)" },
+};
+
+const KPI_LINKS: Record<string, [string, string]> = {
+  participants: ["/participants", "participants.read"], teams: ["/participants", "participants.read"], events: ["/events", "events.read"], venues: ["/venues", "venues.read"],
+  beds: ["/accommodation", "accommodation.read"], volunteers: ["/volunteers", "volunteers.read"], budget: ["/finance", "finance.read"], spent: ["/finance", "finance.read"],
+  approvals: ["/finance?tab=expenses&approval=pending", "finance.read"], incidents: ["/safety", "incidents.read"],
 };
 
 function SeatMarker({ cx, cy, index }: { cx?: number; cy?: number; index?: number }) {
@@ -43,35 +51,40 @@ function KpiValue({ kpi }: { kpi: Kpi }) {
   );
 }
 
-function KpiCard({ kpi }: { kpi: Kpi }) {
-  return (
-    <article className="kpi">
-      <div className="kpi-head"><h3>{kpi.label}</h3><SourceTag source={kpi.source} /></div>
+function KpiCell({ kpi, can }: { kpi: Kpi; can: (permission: string) => boolean }) {
+  const [to, permission] = KPI_LINKS[kpi.key] ?? [];
+  const body = (
+    <>
+      <span className="ribbon-label">{kpi.source === "simulated" && <i className="sim-dot" title={SOURCE_HELP.simulated} />}{kpi.label}</span>
       <KpiValue kpi={kpi} />
-      {kpi.note && <p className="kpi-note">{kpi.note}</p>}
-    </article>
+    </>
   );
+  return to && can(permission) ? <Link className="ribbon-cell" to={to} title={kpi.note ?? undefined}>{body}</Link> : <div className="ribbon-cell" title={kpi.note ?? undefined}>{body}</div>;
 }
 
-function Panel({ title, source, note, children, wide }: { title: string; source: Source; note?: string; children: ReactNode; wide?: boolean }) {
+function Panel({ title, note, children, wide }: { title: string; note?: string; children: ReactNode; wide?: boolean }) {
   return (
     <section className={`panel ${wide ? "wide" : ""}`}>
-      <header><h2>{title}</h2><SourceTag source={source} /></header>
+      <header><h2>{title}</h2></header>
       {note && <p className="panel-note">{note}</p>}
       {children}
     </section>
   );
 }
 
-function AlertRow({ alert }: { alert: Alert }) {
+function Decision({ alert, rank, can }: { alert: Alert; rank: number; can: (permission: string) => boolean }) {
+  const { action } = alert;
+  const Icon = action?.to.startsWith("/ripple") ? Activity : ArrowRight;
   return (
-    <li className={`alert alert-${alert.severity}`}>
-      <span className="alert-level">{alert.severity}</span>
+    <li className={`decision-row alert-${alert.severity}`}>
+      <span className="decision-rank" aria-hidden="true">{rank}</span>
       <div>
+        <span className="alert-level">{alert.severity}</span> <span className="muted small">{alert.module}</span>
+        {alert.source === "simulated" && <i className="sim-dot" title={SOURCE_HELP.simulated} />}
         <h3>{alert.title}</h3>
         <p>{alert.detail}</p>
       </div>
-      <div className="alert-meta"><span>{alert.module}</span><SourceTag source={alert.source} /></div>
+      {action && can(action.permission) && <Link className="button-primary small" to={action.to}><Icon size={16} aria-hidden="true" />{action.label}</Link>}
     </li>
   );
 }
@@ -90,7 +103,8 @@ function Meter({ label, value, total, detail }: { label: string; value: number; 
 
 export function CommandCenter() {
   const { festival, user } = useOutletContext<{ festival: Festival; user: User }>();
-  const allowed = user.permissions.includes("dashboard.read");
+  const can = (permission: string) => user.permissions.includes(permission);
+  const allowed = can("dashboard.read");
   const dashboard = useQuery({
     queryKey: ["dashboard", festival.id],
     queryFn: () => api<Dashboard>(`/api/festivals/${festival.id}/dashboard`),
@@ -98,9 +112,8 @@ export function CommandCenter() {
     enabled: allowed,
   });
 
-  if (!allowed || (dashboard.error instanceof ApiError && dashboard.error.status === 403)) {
-    return <div className="state-empty"><h1>{festival.name}</h1><p>Your role, {user.role.name}, does not include the Command Center.</p></div>;
-  }
+  // Volunteers land on the phone check-in screen, and anyone else without the dashboard on the schedule.
+  if (!allowed || (dashboard.error instanceof ApiError && dashboard.error.status === 403)) return <Navigate to={can("participants.checkin") ? "/check-in" : "/events"} replace />;
   if (dashboard.isPending) return <div className="skeleton-grid" role="status" aria-label="Loading dashboard">{Array.from({ length: 10 }, (_, i) => <div key={i} />)}</div>;
   if (dashboard.isError) {
     return (
@@ -117,22 +130,15 @@ export function CommandCenter() {
 
   return (
     <div className="dashboard">
-      <div className="page-head">
-        <div>
-          <h1>Command Center</h1>
-          <p className="muted">{critical > 0 ? `${critical} critical ${critical === 1 ? "issue needs" : "issues need"} a decision` : "No critical issues"}</p>
-        </div>
-        <div className="legend" aria-label="Data source key">
-          {(["pack", "generated", "simulated"] as Source[]).map((s) => <SourceTag key={s} source={s} />)}
-        </div>
-      </div>
-
-      <section className="kpi-grid" aria-label="Key figures">{kpis.map((k) => <KpiCard key={k.key} kpi={k} />)}</section>
+      <Moment eyebrow={`${festival.name} · Command Center`}
+              title={alerts.length ? `${alerts.length} ${alerts.length === 1 ? "decision needs" : "decisions need"} you` : "Nothing needs a decision"}>
+        {critical > 0 && <p>{critical} {critical === 1 ? "is" : "are"} critical. Simulate a fix before you change anything.</p>}
+      </Moment>
 
       <div className="ops-grid">
         <section className="panel alerts-panel">
-          <header><h2>Priority alerts</h2><span className="muted small">{alerts.length} open</span></header>
-          {alerts.length ? <ul>{alerts.map((a) => <AlertRow key={a.title} alert={a} />)}</ul> : <p className="muted">Nothing needs attention right now.</p>}
+          <header><h2>Next decisions</h2><span className="muted small"><i className="sim-dot" /> Simulated data</span></header>
+          {alerts.length ? <ol>{alerts.map((a, i) => <Decision key={a.title} alert={a} rank={i + 1} can={can} />)}</ol> : <p className="muted">Nothing needs attention right now.</p>}
         </section>
         <section className="panel feed-panel">
           <header><h2>Live operations feed</h2></header>
@@ -142,8 +148,11 @@ export function CommandCenter() {
         </section>
       </div>
 
+      <section className="ribbon" aria-label="Key figures">{kpis.map((k) => <KpiCell key={k.key} kpi={k} can={can} />)}</section>
+
+      <SectionHead title="Planned by FestOS"><SourceTag source="generated" /></SectionHead>
       <div className="chart-grid">
-        <Panel title="Event participation against venue capacity" source="generated" wide note="Bars in red are events with more registrants than their assigned venue has seats.">
+        <Panel title="Event participation against venue capacity" wide note="Bars in red are events with more registrants than their assigned venue has seats.">
           <ResponsiveContainer width="100%" height={280}>
             <ComposedChart data={charts.event_participation} margin={{ left: -16, right: 8 }}>
               <CartesianGrid stroke="var(--line)" vertical={false} />
@@ -163,7 +172,18 @@ export function CommandCenter() {
           </div>
         </Panel>
 
-        <Panel title="Participant arrivals" source="pack" note="The pack has no registration dates, so this shows arrivals instead of a registration trend.">
+        <Panel title="Event status" wide>
+          <div className="meters">
+            {charts.event_status.map((s) => (
+              <Meter key={s.status} label={s.status[0].toUpperCase() + s.status.slice(1)} value={s.count} total={kpis.find((k) => k.key === "events")?.value as number} detail={`${s.count} events`} />
+            ))}
+          </div>
+        </Panel>
+      </div>
+
+      <SectionHead title="From the data pack"><SourceTag source="pack" /></SectionHead>
+      <div className="chart-grid">
+        <Panel title="Participant arrivals" note="The pack has no registration dates, so this shows arrivals instead of a registration trend.">
           <ResponsiveContainer width="100%" height={240}>
             <AreaChart data={charts.arrivals} margin={{ left: -16, right: 8 }}>
               <CartesianGrid stroke="var(--line)" vertical={false} />
@@ -175,7 +195,18 @@ export function CommandCenter() {
           </ResponsiveContainer>
         </Panel>
 
-        <Panel title="Budget utilization" source="simulated">
+        <Panel title="Accommodation occupancy">
+          <div className="meters">
+            {charts.occupancy.map((h) => (
+              <Meter key={h.name} label={h.name} value={h.occupied} total={h.capacity} detail={`${formatNumber(h.occupied)} of ${formatNumber(h.capacity)}`} />
+            ))}
+          </div>
+        </Panel>
+      </div>
+
+      <SectionHead title="Simulated operations"><SourceTag source="simulated" /></SectionHead>
+      <div className="chart-grid">
+        <Panel title="Budget utilization">
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={charts.budget} layout="vertical" barGap={1} margin={{ left: 8, right: 12 }}>
               <XAxis type="number" tick={axis} tickLine={false} axisLine={false} tickFormatter={formatLakh} />
@@ -191,21 +222,13 @@ export function CommandCenter() {
           </div>
         </Panel>
 
-        <Panel title="Accommodation occupancy" source="pack" note="No beds are allocated yet. The allocator arrives in Phase 2.">
-          <div className="meters">
-            {charts.occupancy.map((h) => (
-              <Meter key={h.name} label={h.name} value={h.occupied} total={h.capacity} detail={`${formatNumber(h.occupied)} of ${formatNumber(h.capacity)}`} />
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="Department task progress" source="simulated" note={`${formatNumber(taskTotal)} tasks across ${charts.tasks.length} departments`}>
+        <Panel title="Department task progress" note={`${formatNumber(taskTotal)} tasks across ${charts.tasks.length} departments`}>
           <div className="meters">
             {charts.tasks.map((t) => <Meter key={t.department} label={t.department} value={t.done} total={t.total} detail={`${t.done} of ${t.total} done`} />)}
           </div>
         </Panel>
 
-        <Panel title="Volunteer allocation" source="simulated">
+        <Panel title="Volunteer allocation" wide>
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={charts.volunteers} margin={{ left: -16, right: 8 }}>
               <CartesianGrid stroke="var(--line)" vertical={false} />
@@ -219,14 +242,6 @@ export function CommandCenter() {
           <div className="chart-key">
             <span><i style={{ background: "var(--accent)" }} />Volunteers</span>
             <span><i style={{ background: "var(--cyan)" }} />Shifts</span>
-          </div>
-        </Panel>
-
-        <Panel title="Event status" source="generated">
-          <div className="meters">
-            {charts.event_status.map((s) => (
-              <Meter key={s.status} label={s.status[0].toUpperCase() + s.status.slice(1)} value={s.count} total={kpis.find((k) => k.key === "events")?.value as number} detail={`${s.count} events`} />
-            ))}
           </div>
         </Panel>
       </div>

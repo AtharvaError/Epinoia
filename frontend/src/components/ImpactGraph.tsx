@@ -43,6 +43,36 @@ function edgePoint(from: { x: number; y: number }, to: { x: number; y: number })
   return { x: from.x + dx * scale, y: from.y + dy * scale };
 }
 
+const TONE_LABEL: Record<string, string> = { source: "Change", critical: "Critical", high: "High", medium: "Medium", low: "Low" };
+
+/** The same consequences as the graph, as a vertical chain that stays readable on a phone. */
+export function ImpactChain({ nodes, edges, selected, onSelect }: { nodes: GraphNode[]; edges: GraphEdge[]; selected: string | null; onSelect: (id: string | null) => void }) {
+  const steps = nodes.filter((n) => n.depth !== null).sort((a, b) => a.depth! - b.depth!);
+  const names = Object.fromEntries(nodes.map((n) => [n.id, n.label]));
+  const depths = Object.fromEntries(nodes.map((n) => [n.id, n.depth]));
+  const untouched = nodes.length - steps.length;
+  return (
+    <div className="impact-chain">
+      <ol>
+        {steps.map((n) => {
+          const via = edges.find((e) => e.active && e.target === n.id && (depths[e.source] ?? 0) < n.depth!);
+          const tone = n.depth === 0 ? "source" : n.severity ?? "low";
+          return (
+            <li key={n.id} className={`chain-step chain-${tone}`}>
+              {via && <p className="chain-why">{names[via.source]} {via.relation} {n.label}</p>}
+              <button className={selected === n.id ? "active" : ""} aria-pressed={selected === n.id} onClick={() => onSelect(selected === n.id ? null : n.id)}>
+                <strong>{n.label}</strong>
+                <small>{TONE_LABEL[tone]} · {n.depth === 0 ? "Change starts here" : `${n.records.toLocaleString("en-IN")} ${n.records === 1 ? "record" : "records"}`}</small>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {untouched > 0 && <p className="muted small">{untouched} {untouched === 1 ? "module is" : "modules are"} not affected.</p>}
+    </div>
+  );
+}
+
 export function ImpactGraph({ nodes, edges, selected, onSelect, idle }: {
   nodes: GraphNode[]; edges: GraphEdge[]; selected?: string | null; onSelect?: (id: string | null) => void; idle?: boolean;
 }) {

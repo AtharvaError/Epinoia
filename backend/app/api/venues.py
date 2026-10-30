@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.common import by_code, like, paged
+from app.api.common import by_code, like, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import Event, Festival, Registration, Resource, ResourceAllocation, User, Venue, Volunteer, VolunteerShift
@@ -107,7 +107,7 @@ def resource_row(r: Resource) -> dict[str, Any]:
 
 @router.get("/resources", dependencies=[Depends(require("venues.read"))])
 def list_resources(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), kind: str | None = None, condition: str | None = None,
-                   location: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+                   location: str | None = None, sort: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = select(Resource).where(Resource.festival_id == festival.id)
     if q:
         query = query.where(or_(Resource.name.ilike(like(q), escape="\\"), Resource.code.ilike(like(q), escape="\\")))
@@ -117,7 +117,9 @@ def list_resources(page: int = Query(1, ge=1), q: str | None = Query(None, max_l
         query = query.where(Resource.condition == condition)
     if location:
         query = query.where(Resource.location == location)
-    return paged(db, query.order_by(Resource.kind, Resource.name, Resource.code), page, resource_row)
+    columns = {"code": Resource.code, "item": Resource.name, "location": Resource.location, "total": Resource.quantity, "reserved": Resource.reserved_quantity,
+               "available": Resource.quantity - Resource.reserved_quantity, "condition": Resource.condition}
+    return paged(db, ordered(query, sort, columns, Resource.kind, Resource.name, Resource.code), page, resource_row)
 
 
 @router.post("/resources", status_code=201, dependencies=[Depends(require("venues.write"))])

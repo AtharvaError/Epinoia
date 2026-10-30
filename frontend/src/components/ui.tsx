@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, X } from "lucide-react";
 import {
   type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore,
 } from "react";
@@ -76,12 +76,32 @@ export function Toasts() {
   return <div className="toasts" role="status" aria-live="polite">{items.map((t) => <div key={t.id} className="toast">{t.text}</div>)}</div>;
 }
 
-export function PageHead({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
+export function PageHead({ title, subtitle, simulated, children }: { title: string; subtitle?: string; simulated?: boolean; children?: ReactNode }) {
   return (
     <div className="page-head">
-      <div><h1>{title}</h1>{subtitle && <p className="muted">{subtitle}</p>}</div>
+      <div><h1>{title}{simulated && <> <Simulated /></>}</h1>{subtitle && <p className="muted">{subtitle}</p>}</div>
       {children && <div className="page-actions">{children}</div>}
     </div>
+  );
+}
+
+/** Heads a group of panels, so where the data came from is said once. */
+export function SectionHead({ title, children }: { title: string; children?: ReactNode }) {
+  return <div className="section-head"><h2>{title}</h2>{children}</div>;
+}
+
+/** The bold band that marks a key moment, in the same shape as the sign-in screen. */
+export function Moment({ eyebrow, title, children }: { eyebrow?: ReactNode; title: ReactNode; children?: ReactNode }) {
+  return (
+    <section className="moment">
+      {eyebrow && <div className="moment-eyebrow">{eyebrow}</div>}
+      <h1>{title}</h1>
+      {children && <div className="moment-body">{children}</div>}
+      <svg className="moment-wave" viewBox="0 0 800 260" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 90C120 140 190 215 250 260H0V90Z" />
+        <path d="M800 120C680 135 560 190 480 260H800V120Z" />
+      </svg>
+    </section>
   );
 }
 
@@ -99,18 +119,43 @@ export interface Column<T> {
   label: string;
   cell: (row: T) => ReactNode;
   className?: string;
+  /** Server sort key, for paged tables where only the server has every row. */
+  sort?: string;
+  /** Sort value, for tables that already hold every row. */
+  value?: (row: T) => string | number | null;
 }
 
-export function DataTable<T>({ rows, columns, rowKey, onRow, empty }: {
-  rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string | number; onRow?: (row: T) => void; empty: string;
+export function DataTable<T>({ rows, columns, rowKey, onRow, empty, sort, onSort }: {
+  rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string | number; onRow?: (row: T) => void; empty: string; sort?: string; onSort?: (sort: string) => void;
 }) {
+  const [local, setLocal] = useState("");
+  const active = sort ?? local;
+  const order = active.startsWith("-") ? -1 : 1;
+  const byValue = columns.find((c) => c.value && c.label === active.replace(/^-/, ""))?.value;
+  const shown = useMemo(() => (byValue ? [...rows].sort((a, b) => {
+    const [x, y] = [byValue(a), byValue(b)];
+    if (x === null || y === null) return x === y ? 0 : x === null ? 1 : -1;
+    return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y))) * order;
+  }) : rows), [rows, byValue, order]);
   if (!rows.length) return <p className="table-empty muted">{empty}</p>;
+  const heading = (c: Column<T>) => {
+    const key = c.sort ?? (c.value ? c.label : undefined);
+    if (!key) return c.label;
+    const direction = active === key ? "ascending" : active === `-${key}` ? "descending" : undefined;
+    const Icon = direction === "ascending" ? ArrowUp : direction === "descending" ? ArrowDown : ArrowUpDown;
+    const next = direction === "ascending" ? `-${key}` : direction === "descending" ? "" : key;
+    return <button className="th-sort" onClick={() => (onSort ?? setLocal)(next)}>{c.label}<Icon size={13} aria-hidden="true" /></button>;
+  };
+  const ariaSort = (c: Column<T>) => {
+    const key = c.sort ?? c.label;
+    return active === key ? "ascending" as const : active === `-${key}` ? "descending" as const : undefined;
+  };
   return (
-    <div className="table-wrap" role="region" aria-label="Table, scrolls sideways on small screens" tabIndex={0}>
+    <div className="table-wrap" role="region" aria-label="Table, scrolls on small screens" tabIndex={0}>
       <table>
-        <thead><tr>{columns.map((c) => <th key={c.label} scope="col" className={c.className}>{c.label}</th>)}</tr></thead>
+        <thead><tr>{columns.map((c) => <th key={c.label} scope="col" className={c.className} aria-sort={ariaSort(c)}>{heading(c)}</th>)}</tr></thead>
         <tbody>
-          {rows.map((row) => (
+          {shown.map((row) => (
             <tr key={rowKey(row)} className={onRow ? "clickable" : ""} onClick={onRow && (() => onRow(row))}
                 tabIndex={onRow ? 0 : undefined} onKeyDown={onRow && ((e) => e.key === "Enter" && onRow(row))}>
               {columns.map((c) => <td key={c.label} className={c.className}>{c.cell(row)}</td>)}
@@ -134,13 +179,14 @@ export function Pagination({ page, pages, total, onPage }: { page: number; pages
 }
 
 /** A modal built on the native dialog element, which handles focus and Escape. */
-export function Dialog({ title, onClose, children, side }: { title: string; onClose: () => void; children: ReactNode; side?: boolean }) {
+export function Dialog({ title, onClose, children, side, className = "" }: { title: string; onClose: () => void; children: ReactNode; side?: boolean; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     ref.current?.showModal();
+    ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus(); // showModal moves focus to the close button.
   }, []);
   return (
-    <dialog ref={ref} className={side ? "dialog side" : "dialog"} onClose={onClose} onClick={(e) => e.target === ref.current && onClose()}>
+    <dialog ref={ref} className={`dialog ${side ? "side" : ""} ${className}`} onClose={onClose} onClick={(e) => e.target === ref.current && onClose()}>
       <header><h2>{title}</h2><button className="icon-button" aria-label="Close" onClick={onClose}><X size={18} /></button></header>
       <div className="dialog-body">{children}</div>
     </dialog>

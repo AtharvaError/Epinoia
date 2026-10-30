@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download, QrCode, Upload, UserPlus } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import {
   type Column, DataTable, Dialog, ErrorNote, Facts, Field, Loading, notify, PageHead, Pagination, Pill, QueryState,
@@ -154,34 +154,6 @@ function ParticipantDetail({ code, options, onClose }: { code: string; options?:
   );
 }
 
-function PassCheck({ onClose }: { onClose: () => void }) {
-  const { base } = useFest();
-  const [token, setToken] = useState("");
-  const verify = useAction(() => api<{ valid: boolean; code?: string; full_name?: string; college?: string; checkin_status?: string; registration_status?: string }>(`${base}/passes/verify`, { method: "POST", body: JSON.stringify({ token: token.trim() }) }));
-  const checkIn = useAction(() => api<{ full_name: string }>(`${base}/passes/check-in`, { method: "POST", body: JSON.stringify({ token: token.trim() }) }), {
-    success: (r) => `${r.full_name} checked in`, onDone: () => verify.mutate(),
-  });
-  const result = verify.data;
-  return (
-    <Dialog title="Verify a pass" onClose={onClose}>
-      <form className="form" onSubmit={(e) => { e.preventDefault(); verify.mutate(); }}>
-        <Field label="Pass code" hint="Scan with a QR reader, which types the code here"><input required minLength={8} autoFocus value={token} onChange={(e) => setToken(e.target.value)} /></Field>
-        <button className="button-primary" disabled={verify.isPending}>Verify</button>
-      </form>
-      <ErrorNote error={verify.error || checkIn.error} />
-      {result && !result.valid && <p className="form-error" role="alert">This pass is not valid.</p>}
-      {result?.valid && (
-        <div className="result-card">
-          <strong>{result.full_name}</strong> <span className="muted">{result.code}</span>
-          <p className="muted small">{result.college}</p>
-          <p><Pill value={result.checkin_status ?? ""} tone={result.checkin_status === "checked_in" ? "ok" : undefined} /></p>
-          {result.checkin_status !== "checked_in" && <button className="button-primary" disabled={checkIn.isPending} onClick={() => checkIn.mutate()}>Check in</button>}
-        </div>
-      )}
-    </Dialog>
-  );
-}
-
 function ImportDialog({ onClose }: { onClose: () => void }) {
   const { base } = useFest();
   const file = useRef<HTMLInputElement>(null);
@@ -209,33 +181,34 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
 }
 
 const columns: Column<Row>[] = [
-  { label: "ID", cell: (r) => <span className="mono">{r.code}</span> },
-  { label: "Name", cell: (r) => <strong>{r.full_name}</strong> },
-  { label: "College", cell: (r) => r.college },
-  { label: "Events", cell: (r) => r.event_count, className: "num" },
-  { label: "Accommodation", cell: (r) => yesNo(r.accommodation_required) },
-  { label: "Registration", cell: (r) => <Pill value={r.registration_status} tone={r.registration_status === "cancelled" ? "bad" : undefined} /> },
-  { label: "Check-in", cell: (r) => <Pill value={r.checkin_status} tone={r.checkin_status === "checked_in" ? "ok" : undefined} /> },
+  { label: "ID", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
+  { label: "Name", sort: "name", cell: (r) => <strong>{r.full_name}</strong> },
+  { label: "College", sort: "college", cell: (r) => r.college },
+  { label: "Events", sort: "events", cell: (r) => r.event_count, className: "num" },
+  { label: "Accommodation", sort: "accommodation", cell: (r) => yesNo(r.accommodation_required) },
+  { label: "Registration", sort: "registration", cell: (r) => <Pill value={r.registration_status} tone={r.registration_status === "cancelled" ? "bad" : undefined} /> },
+  { label: "Check-in", sort: "checkin", cell: (r) => <Pill value={r.checkin_status} tone={r.checkin_status === "checked_in" ? "ok" : undefined} /> },
 ];
 
 export function Participants() {
   const { base, can } = useFest();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({ contingent: "", event: "", accommodation: "", checkin: "", status: "", flagged: false });
+  const [filters, setFilters] = useState({ contingent: "", event: "", accommodation: "", checkin: "", status: "", flagged: params.has("flagged") });
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
-  const [dialog, setDialog] = useState<"add" | "import" | "verify" | null>(null);
+  const [dialog, setDialog] = useState<"add" | "import" | null>(null);
   const q = useDebounced(search);
-  useEffect(() => setPage(1), [q, filters]);
+  useEffect(() => setPage(1), [q, filters, sort]);
   const opened = params.get("open");
-  const query = usePaged<Row>(`${base}/participants`, { q, ...filters, page });
+  const query = usePaged<Row>(`${base}/participants`, { q, ...filters, sort, page });
   const options = useQuery({ queryKey: ["participant-options", base], queryFn: () => api<Options>(`${base}/participants/filters`) });
   const update = (key: keyof typeof filters) => (e: { target: { value: string } }) => setFilters({ ...filters, [key]: e.target.value });
   const exportUrl = `${base}/participants/export.csv${queryString({ q, ...filters })}`;
   return (
     <div>
       <PageHead title="Participants" subtitle="Every record, with what needs review">
-        {can("participants.checkin") && <button className="button-ghost" onClick={() => setDialog("verify")}><QrCode size={16} /> Verify pass</button>}
+        {can("participants.checkin") && <Link className="button-ghost" to="/check-in"><QrCode size={16} /> Check-in</Link>}
         <a className="button-ghost" href={exportUrl} onClick={() => notify("Export started")}><Download size={16} /> Export CSV</a>
         {can("participants.write") && <button className="button-ghost" onClick={() => setDialog("import")}><Upload size={16} /> Import</button>}
         {can("participants.write") && <button className="button-primary small" onClick={() => setDialog("add")}><UserPlus size={16} /> Add participant</button>}
@@ -252,7 +225,7 @@ export function Participants() {
       <QueryState query={query}>
         {query.data && (
           <>
-            <DataTable rows={query.data.items} columns={columns} rowKey={(r) => r.code} empty="No participants match these filters." onRow={(r) => setParams({ open: r.code })} />
+            <DataTable rows={query.data.items} columns={columns} rowKey={(r) => r.code} empty="No participants match these filters." onRow={(r) => setParams({ open: r.code })} sort={sort} onSort={setSort} />
             <Pagination page={query.data.page} pages={query.data.pages} total={query.data.total} onPage={setPage} />
           </>
         )}
@@ -260,7 +233,6 @@ export function Participants() {
       {opened && <ParticipantDetail code={opened} options={options.data} onClose={() => setParams({})} />}
       {dialog === "add" && (options.data ? <Dialog title="Add participant" onClose={() => setDialog(null)} side><ParticipantForm options={options.data} onDone={() => setDialog(null)} /></Dialog> : <Loading />)}
       {dialog === "import" && <ImportDialog onClose={() => setDialog(null)} />}
-      {dialog === "verify" && <PassCheck onClose={() => setDialog(null)} />}
     </div>
   );
 }

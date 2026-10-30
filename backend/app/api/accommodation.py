@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.common import by_code, like, paged
+from app.api.common import by_code, like, ordered, paged
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
 from app.models import AccommodationAllocation, Festival, Hostel, Participant, Room, User
@@ -97,9 +97,22 @@ def create_room(body: RoomIn, festival: Festival = Depends(festival_access), use
     return {"code": room.code}
 
 
+@router.get("/room-map", dependencies=[Depends(require("accommodation.read"))])
+def room_map(festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+    occupied = occupied_counts(db, festival.id)
+    hostels: dict[int, dict[str, Any]] = {}
+    rows = db.execute(select(Room, Hostel).join(Hostel, Hostel.id == Room.hostel_id).where(Room.festival_id == festival.id)
+                      .order_by(Hostel.kind.desc(), Hostel.code, Room.floor.nulls_last(), Room.code))
+    for room, hostel in rows:
+        h = hostels.setdefault(hostel.id, {"code": hostel.code, "name": hostel.name, "kind": hostel.kind, "status": hostel.status, "rooms": []})
+        h["rooms"].append({"code": room.code, "floor": room.floor, "capacity": room.capacity, "occupied": occupied.get(room.id, 0),
+                           "gender_policy": room.gender_policy, "accessible": room.accessible, "status": room.status})
+    return list(hostels.values())
+
+
 @router.get("/rooms", dependencies=[Depends(require("accommodation.read"))])
 def list_rooms(page: int = Query(1, ge=1), hostel: str | None = None, q: str | None = Query(None, max_length=40), gender: str | None = None,
-               accessible: bool | None = None, free_only: bool = False, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
+               accessible: bool | None = None, free_only: bool = False, sort: str | None = None, festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     occupied = occupied_counts(db, festival.id)
     query = select(Room).join(Hostel, Hostel.id == Room.hostel_id).where(Room.festival_id == festival.id)
     if hostel:
@@ -119,11 +132,14 @@ def list_rooms(page: int = Query(1, ge=1), hostel: str | None = None, q: str | N
         used = occupied.get(r.id, 0)
         return {"code": r.code, "hostel": names[r.hostel_id], "floor": r.floor, "gender_policy": r.gender_policy, "capacity": r.capacity,
                 "occupied": used, "available": max(0, r.capacity - used), "accessible": r.accessible, "status": r.status}
-    return paged(db, query.order_by(Room.code), page, row)
+    used = select(func.count()).select_from(AccommodationAllocation).where(AccommodationAllocation.room_id == Room.id, ACTIVE).scalar_subquery()
+    columns = {"code": Room.code, "hostel": Hostel.name, "floor": Room.floor, "policy": Room.gender_policy, "accessible": Room.accessible,
+               "occupied": used, "free": Room.capacity - used}
+    return paged(db, ordered(query, sort, columns, Room.code), page, row)
 
 
 @router.get("/allocations", dependencies=[Depends(require("accommodation.read"))])
-def list_allocations(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), room: str | None = None,
+def list_allocations(page: int = Query(1, ge=1), q: str | None = Query(None, max_length=80), room: str | None = None, sort: str | None = None,
                      festival: Festival = Depends(festival_access), db: Session = Depends(get_db)):
     query = (select(AccommodationAllocation).join(Participant, Participant.id == AccommodationAllocation.participant_id)
              .join(Room, Room.id == AccommodationAllocation.room_id).where(AccommodationAllocation.festival_id == festival.id, ACTIVE))
@@ -139,13 +155,15 @@ def list_allocations(page: int = Query(1, ge=1), q: str | None = Query(None, max
         r = rooms.setdefault(a.room_id, db.get(Room, a.room_id))
         return {"id": a.id, "participant": p.code, "name": p.full_name, "room": r.code, "status": a.status, "check_in_at": a.check_in_at,
                 "check_out_at": a.check_out_at, "relaxed_constraints": a.relaxed_constraints, "override_reason": a.override_reason}
-    return paged(db, query.order_by(Participant.code), page, row)
+    columns = {"name": Participant.full_name, "room": Room.code, "status": AccommodationAllocation.status}
+    return paged(db, ordered(query, sort, columns, Participant.code), page, row)
 
 
 @router.get("/unallocated", dependencies=[Depends(require("accommodation.read"))])
-def unallocated(page: int = Query(1, ge=1), festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
+def unallocated(page: int = Query(1, ge=1), sort: str | None = None, festival: Festival = Depends(festival_access), user: User = Depends(current_user), db: Session = Depends(get_db)):
     sensitive = "participants.read_sensitive" in permissions_of(user)
-    return paged(db, unallocated_query(festival.id).order_by(Participant.code), page, lambda p: {
+    columns = {"code": Participant.code, "name": Participant.full_name, "college": Participant.college}
+    return paged(db, ordered(unallocated_query(festival.id), sort, columns, Participant.code), page, lambda p: {
         "code": p.code, "name": p.full_name, "college": p.college, "gender": p.gender_as_given if sensitive else None,
         "accessibility": p.accessibility_needs if sensitive else None, "restricted": not sensitive})
 

@@ -1,42 +1,71 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Bell, BedDouble, Bus, CalendarDays, ChevronsLeft, ChevronsRight, HandHelping, LayoutDashboard,
-  LogOut, Megaphone, Menu, MessageCircleQuestion, Search, Settings, ShieldAlert, UserRound, Users, Wallet, Warehouse, X, type LucideIcon,
+  LogOut, Megaphone, Menu, MessageCircleQuestion, Moon, QrCode, Search, Settings, ShieldAlert, Sun, UserRound, Users, Wallet, Warehouse, X, type LucideIcon,
 } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { Assistant, type Message } from "./Assistant";
+import { type Command, CommandPalette } from "./CommandPalette";
 import { ProfileDialog } from "./ProfileDialog";
 import { Loading, Toasts } from "./ui";
-import { api, type Festival, type Notifications, type SearchResult, type User } from "../lib/api";
+import { api, type Festival, type Notifications, type User } from "../lib/api";
 import { formatTime } from "../lib/format";
 
 interface NavItem {
   label: string;
   icon: LucideIcon;
-  permission?: string;
-  to?: string;
-  phase?: number;
+  permission: string;
+  to: string;
 }
 
-const NAV: NavItem[] = [
-  { label: "Command Center", icon: LayoutDashboard, permission: "dashboard.read", to: "/" },
-  { label: "Events & Schedule", icon: CalendarDays, permission: "events.read", to: "/events" },
-  { label: "Participants", icon: Users, permission: "participants.read", to: "/participants" },
-  { label: "Accommodation", icon: BedDouble, permission: "accommodation.read", to: "/accommodation" },
-  { label: "Transportation", icon: Bus, permission: "transport.read", to: "/transportation" },
-  { label: "Volunteers", icon: HandHelping, permission: "volunteers.read", to: "/volunteers" },
-  { label: "Venues & Resources", icon: Warehouse, permission: "venues.read", to: "/venues" },
-  { label: "Finance", icon: Wallet, permission: "finance.read", to: "/finance" },
-  { label: "Communication", icon: Megaphone, permission: "communication.read", to: "/communication" },
-  { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", to: "/safety" },
-  { label: "Ripple Simulator", icon: Activity, permission: "simulation.run", to: "/ripple" },
-  { label: "Analytics & Reports", icon: BarChart3, permission: "analytics.read", to: "/analytics" },
-  { label: "Settings", icon: Settings, permission: "settings.manage", to: "/settings" },
+const NAV: { group: string; items: NavItem[] }[] = [
+  { group: "Operate", items: [
+    { label: "Command Center", icon: LayoutDashboard, permission: "dashboard.read", to: "/" },
+    { label: "Check-in", icon: QrCode, permission: "participants.checkin", to: "/check-in" },
+    { label: "Ripple Simulator", icon: Activity, permission: "simulation.run", to: "/ripple" },
+    { label: "Safety & Incidents", icon: ShieldAlert, permission: "incidents.read", to: "/safety" },
+    { label: "Communication", icon: Megaphone, permission: "communication.read", to: "/communication" },
+  ] },
+  { group: "Plan", items: [
+    { label: "Events & Schedule", icon: CalendarDays, permission: "events.read", to: "/events" },
+    { label: "Participants", icon: Users, permission: "participants.read", to: "/participants" },
+    { label: "Accommodation", icon: BedDouble, permission: "accommodation.read", to: "/accommodation" },
+    { label: "Transportation", icon: Bus, permission: "transport.read", to: "/transportation" },
+    { label: "Volunteers", icon: HandHelping, permission: "volunteers.read", to: "/volunteers" },
+    { label: "Venues & Resources", icon: Warehouse, permission: "venues.read", to: "/venues" },
+  ] },
+  { group: "Review", items: [
+    { label: "Finance", icon: Wallet, permission: "finance.read", to: "/finance" },
+    { label: "Analytics & Reports", icon: BarChart3, permission: "analytics.read", to: "/analytics" },
+    { label: "Settings", icon: Settings, permission: "settings.manage", to: "/settings" },
+  ] },
+];
+
+const SIMULATIONS = [
+  ["hostel_closure", "Hostel unavailable"], ["venue_change", "Venue change"], ["bus_delay", "Bus delayed"],
+  ["volunteers_unavailable", "Volunteers unavailable"], ["budget_reduction", "Budget reduced"],
 ];
 
 const COLLAPSE_KEY = "festos.sidebar";
+const THEME_KEY = "festos.theme";
+
+/** Sunlight is a high-contrast light theme for organizers working outdoors. */
+function useTheme() {
+  const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? "night");
+  const toggle = () => {
+    const next = theme === "sun" ? "night" : "sun";
+    document.documentElement.dataset.theme = next;
+    setTheme(next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      // Only a convenience: the theme still applies for this visit.
+    }
+  };
+  return { theme, toggle };
+}
 
 function remembered() {
   try {
@@ -109,43 +138,6 @@ function Clock() {
     return () => clearInterval(timer);
   }, []);
   return <time className="clock">{formatTime(now.toISOString())} IST</time>;
-}
-
-function GlobalSearch({ festivalId }: { festivalId: number }) {
-  const [term, setTerm] = useState("");
-  const [query, setQuery] = useState("");
-  useEffect(() => {
-    const timer = setTimeout(() => setQuery(term.trim()), 250);
-    return () => clearTimeout(timer);
-  }, [term]);
-
-  const results = useQuery({
-    queryKey: ["search", festivalId, query],
-    queryFn: () => api<SearchResult[]>(`/api/festivals/${festivalId}/search?q=${encodeURIComponent(query)}`),
-    enabled: query.length >= 2,
-  });
-
-  return (
-    <div className="search">
-      <Search size={16} aria-hidden="true" />
-      <input type="search" placeholder="Search participants and events" aria-label="Search participants and events"
-             value={term} onChange={(e) => setTerm(e.target.value)} onBlur={() => setTimeout(() => setTerm(""), 150)} />
-      {query.length >= 2 && term && (
-        <div className="popover search-results">
-          {results.isPending && <p className="muted small">Searching</p>}
-          {results.isError && <p className="form-error">{results.error.message}</p>}
-          {results.data?.length === 0 && <p className="muted small">No matches for “{query}”.</p>}
-          {results.data?.map((r) => (
-            <Link key={`${r.type}-${r.code}`} className="search-row" to={`/${r.type === "Event" ? "events" : "participants"}?open=${r.code}`}>
-              <span className="mono">{r.code}</span>
-              <span><strong>{r.title}</strong><small>{r.subtitle}</small></span>
-              <span className="tag">{r.type}</span>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function usePopover() {
@@ -243,15 +235,34 @@ export function Shell({ user }: { user: User }) {
   const [festivalId, setFestivalId] = useState(rememberedFestival);
   const festivals = useQuery({ queryKey: ["festivals"], queryFn: () => api<Festival[]>("/api/festivals") });
   const festival = festivals.data?.find((f) => f.id === festivalId) ?? festivals.data?.[0];
-  const allowed = NAV.filter((item) => !item.permission || user.permissions.includes(item.permission));
+  const allowed = NAV.map(({ group, items }) => ({ group, items: items.filter((item) => user.permissions.includes(item.permission)) })).filter((g) => g.items.length);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [conversation, setConversation] = useState<Message[]>([]);
+  const { theme, toggle: toggleTheme } = useTheme();
   useLiveUpdates(festival?.id);
+
+  useEffect(() => {
+    const open = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    document.addEventListener("keydown", open);
+    return () => document.removeEventListener("keydown", open);
+  }, []);
 
   const toggle = () => {
     remember(!collapsed);
     setCollapsed(!collapsed);
   };
+
+  const commands: Command[] = [
+    ...allowed.flatMap((g) => g.items.map((item) => ({ label: item.label, hint: g.group, to: item.to }))),
+    ...(user.permissions.includes("simulation.run") ? SIMULATIONS.map(([key, label]) => ({ label: `Simulate: ${label}`, hint: "Ripple Simulator", to: `/ripple?scenario=${key}` })) : []),
+    { label: theme === "sun" ? "Switch to night mode" : "Switch to sunlight mode", hint: "Display", run: toggleTheme },
+  ];
 
   return (
     <div className={`shell ${collapsed ? "collapsed" : ""}`}>
@@ -262,17 +273,16 @@ export function Shell({ user }: { user: User }) {
           <button className="icon-button drawer-close" aria-label="Close menu" onClick={() => setDrawer(false)}><X size={18} /></button>
         </div>
         <nav aria-label="Main">
-          {allowed.map(({ label, icon: Icon, to, phase }) =>
-            to ? (
-              <NavLink key={label} to={to} end className={`nav-item ${label === "Ripple Simulator" ? "signature" : ""}`} title={label} onClick={() => setDrawer(false)}>
-                <Icon size={18} aria-hidden="true" /><span className="nav-text">{label}</span>
-              </NavLink>
-            ) : (
-              <span key={label} className="nav-item disabled" aria-disabled="true" title={`${label} arrives in Phase ${phase}`}>
-                <Icon size={18} aria-hidden="true" /><span className="nav-text">{label}</span><span className="nav-phase">P{phase}</span>
-              </span>
-            ),
-          )}
+          {allowed.map(({ group, items }) => (
+            <div key={group} className="nav-group">
+              <h2 className="nav-label">{group}</h2>
+              {items.map(({ label, icon: Icon, to }) => (
+                <NavLink key={label} to={to} end className={`nav-item ${label === "Ripple Simulator" ? "signature" : ""}`} title={label} onClick={() => setDrawer(false)}>
+                  <Icon size={18} aria-hidden="true" /><span className="nav-text">{label}</span>
+                </NavLink>
+              ))}
+            </div>
+          ))}
         </nav>
         <button className="collapse" onClick={toggle} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
           {collapsed ? <ChevronsRight size={18} /> : <><ChevronsLeft size={18} /><span className="nav-text">Collapse</span></>}
@@ -288,9 +298,14 @@ export function Shell({ user }: { user: User }) {
             </select>
           )}
           {festival && <span className={`phase phase-${festival.phase.toLowerCase()}`}>{festival.phase}</span>}
-          {festival && <GlobalSearch festivalId={festival.id} />}
+          {festival && (
+            <button className="search" onClick={() => setPaletteOpen(true)}>
+              <Search size={16} aria-hidden="true" /><span>Search or jump to</span><kbd>Ctrl K</kbd>
+            </button>
+          )}
           <div className="topbar-end">
             <Clock />
+            <button className="icon-button" aria-label={theme === "sun" ? "Switch to night mode" : "Switch to sunlight mode"} title={theme === "sun" ? "Night mode" : "Sunlight mode"} onClick={toggleTheme}>{theme === "sun" ? <Moon size={18} /> : <Sun size={18} />}</button>
             <button className="icon-button" aria-label="Open the festival assistant" title="Festival assistant" onClick={() => setAssistantOpen(true)}><MessageCircleQuestion size={18} /></button>
             {festival && <NotificationCenter festivalId={festival.id} />}
             <Profile user={user} />
@@ -302,6 +317,7 @@ export function Shell({ user }: { user: User }) {
         </main>
       </div>
       {assistantOpen && festival && <Assistant festivalId={festival.id} messages={conversation} setMessages={setConversation} onClose={() => setAssistantOpen(false)} />}
+      {paletteOpen && festival && <CommandPalette festivalId={festival.id} commands={commands} onClose={() => setPaletteOpen(false)} />}
       <Toasts />
     </div>
   );

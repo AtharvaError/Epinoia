@@ -15,6 +15,14 @@ def paged(db: Session, query: Select, page: int, serialize: Callable[[Any], dict
     return {"items": [serialize(r) for r in rows], "total": total, "page": page, "pages": max(1, -(-total // size)), "page_size": size}
 
 
+def ordered(query: Select, sort: str | None, columns: dict[str, Any], *default: Any) -> Select:
+    """Apply ?sort=name or ?sort=-name from a fixed list of columns. Anything else keeps the default order."""
+    column = columns.get((sort or "").removeprefix("-"))
+    if column is None:
+        return query.order_by(*default)
+    return query.order_by((column.desc() if sort.startswith("-") else column.asc()).nulls_last(), *default)
+
+
 def by_code(db: Session, model: type[T], festival_id: int, code: str) -> T:
     query = select(model).where(model.festival_id == festival_id, model.code == code)
     if hasattr(model, "deleted_at"):

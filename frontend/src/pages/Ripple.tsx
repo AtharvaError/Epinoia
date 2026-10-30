@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { Activity, BedDouble, Bus, CalendarClock, Users, Wallet, type LucideIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { type GraphEdge, type GraphNode, ImpactGraph } from "../components/ImpactGraph";
+import { type GraphEdge, type GraphNode, ImpactChain, ImpactGraph } from "../components/ImpactGraph";
 import {
-  type Column, DataTable, ErrorNote, Field, Loading, notify, PageHead, Pagination, Pill, QueryState, Tabs, fromInput, toInput, useAction, useDebounced, useFest, usePaged,
+  type Column, DataTable, ErrorNote, Field, Loading, Moment, notify, PageHead, Pagination, Pill, QueryState, Tabs, fromInput, toInput, useAction, useDebounced, useFest, usePaged,
 } from "../components/ui";
 import { api } from "../lib/api";
 import { formatMoney, formatNumber, formatTime } from "../lib/format";
@@ -212,7 +212,11 @@ function Decision({ simulation, onNew, onClosed }: { simulation: Simulation; onN
   const stale = status === "stale" || (open && current === false);
 
   if (status === "applied") {
-    return <div className="decision done"><Pill value="applied" tone="ok" /><span>Applied{simulation.approval?.decided_by ? ` by ${simulation.approval.decided_by}` : ""}{simulation.approval?.decided_at ? ` on ${formatTime(simulation.approval.decided_at)}` : ""}.</span>{simulation.approval?.reason && <span className="muted">Reason: {simulation.approval.reason}</span>}</div>;
+    return (
+      <Moment eyebrow={`Applied${simulation.approval?.decided_by ? ` by ${simulation.approval.decided_by}` : ""}${simulation.approval?.decided_at ? `, ${formatTime(simulation.approval.decided_at)}` : ""}`} title="Change applied">
+        <p>The records, audit log and notifications all updated together.{simulation.approval?.reason ? ` Reason: ${simulation.approval.reason}` : ""}</p>
+      </Moment>
+    );
   }
   if (!open && !stale) {
     return <div className="decision done"><Pill value={status} tone={STATUS_TONE[status]} />{simulation.approval?.reason && <span className="muted">{simulation.approval.reason}</span>}<button className="button-ghost" disabled={recalculate.isPending} onClick={() => recalculate.mutate()}>Run again</button></div>;
@@ -253,15 +257,15 @@ function Results({ simulation, onNew, onClosed, onTry }: { simulation: Simulatio
   const chain = report.graph.edges.filter((e) => e.active);
   const names = Object.fromEntries(report.graph.nodes.map((n) => [n.id, n.label]));
   const open = simulation.status === "previewed";
+  const top = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (matchMedia("(max-width: 960px)").matches) top.current?.scrollIntoView(); // The form sits above the results here.
+  }, []);
   return (
-    <div className="results">
-      <header className="results-head">
-        <div>
-          <div className="row-actions"><Pill value={simulation.status} tone={STATUS_TONE[simulation.status]} /><span className="muted small">{simulation.created_by}, {formatTime(simulation.created_at)}</span></div>
-          <h2>{report.title}</h2>
-          <p>{report.headline}</p>
-        </div>
-      </header>
+    <div className="results" ref={top}>
+      <Moment eyebrow={<><Pill value={simulation.status} tone={STATUS_TONE[simulation.status]} /> {simulation.created_by}, {formatTime(simulation.created_at)}</>} title={report.title}>
+        <p>{report.headline}</p>
+      </Moment>
       <div className="stat-row">
         <div><span>Direct records</span><strong>{formatNumber(summary.direct_records)}</strong></div>
         <div><span>Indirect records</span><strong>{formatNumber(summary.indirect_records)}</strong></div>
@@ -272,12 +276,15 @@ function Results({ simulation, onNew, onClosed, onTry }: { simulation: Simulatio
       </div>
       <section className="panel">
         <header><h2>Impact dependency graph</h2><span className="muted small">Select a module to filter the impacts</span></header>
-        <ImpactGraph nodes={report.graph.nodes} edges={report.graph.edges} selected={module} onSelect={setModule} />
-        <div className="graph-key">
-          <span><i className="key source" />Change</span><span><i className="key critical" />Critical</span><span><i className="key high" />High</span>
-          <span><i className="key medium" />Medium</span><span><i className="key low" />Low</span><span><i className="key off" />Not affected</span>
+        <ImpactChain nodes={report.graph.nodes} edges={report.graph.edges} selected={module} onSelect={setModule} />
+        <div className="wide-only">
+          <ImpactGraph nodes={report.graph.nodes} edges={report.graph.edges} selected={module} onSelect={setModule} />
+          <div className="graph-key">
+            <span><i className="key source" />Change</span><span><i className="key critical" />Critical</span><span><i className="key high" />High</span>
+            <span><i className="key medium" />Medium</span><span><i className="key low" />Low</span><span><i className="key off" />Not affected</span>
+          </div>
+          {chain.length > 0 && <p className="chain"><strong>How it travelled: </strong>{chain.map((e) => `${names[e.source]} ${e.relation} ${names[e.target]}`).join(". ")}.</p>}
         </div>
-        {chain.length > 0 && <p className="chain"><strong>How it travelled: </strong>{chain.map((e) => `${names[e.source]} ${e.relation} ${names[e.target]}`).join(". ")}.</p>}
       </section>
       <div className="chart-grid">
         <section className="panel">
@@ -407,6 +414,23 @@ export function Ripple() {
     setParams({ simulation: String(id) });
   };
   const run = useAction((body: { scenario: Scenario; change: Change }) => api<Simulation>(`${base}/simulations`, { method: "POST", body: JSON.stringify(body) }), { onDone: (s) => open(s.id) });
+
+  // A link can pre-fill a scenario: ?scenario=venue_change&event_code=E01. Adding run=1 simulates it at once.
+  const handled = useRef("");
+  useEffect(() => {
+    const search = params.toString();
+    const key = params.get("scenario") as Scenario | null;
+    if (!key) handled.current = "";
+    if (!key || handled.current === search || !SCENARIOS.some((s) => s.key === key)) return;
+    handled.current = search;
+    const { scenario: _scenario, run: auto, ...fields } = Object.fromEntries(params);
+    const prefill: Change = { ...fields, retime: Boolean(fields.start_at) };
+    setTab("simulate");
+    setScenario(key);
+    setChanges((all) => ({ ...all, [key]: prefill }));
+    if (auto) run.mutate({ scenario: key, change: payload(key, prefill) });
+    else setParams({}, { replace: true });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const simulation = detail.data;
   useEffect(() => {

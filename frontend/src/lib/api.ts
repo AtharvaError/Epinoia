@@ -71,6 +71,7 @@ export interface Alert {
   title: string;
   detail: string;
   source: Source;
+  action: { label: string; to: string; permission: string } | null;
 }
 
 export interface FeedItem {

@@ -74,12 +74,12 @@ function IncidentDrawer({ code, onClose }: { code: string; onClose: () => void }
 }
 
 const columns: Column<Incident>[] = [
-  { label: "ID", cell: (i) => <span className="mono">{i.code}</span> },
+  { label: "ID", sort: "code", cell: (i) => <span className="mono">{i.code}</span> },
   { label: "Incident", cell: (i) => <><strong>{i.category}</strong><br /><small className="muted">{i.location}</small></> },
-  { label: "Priority", cell: (i) => <Pill value={i.priority} tone={PRIORITY[i.priority]} /> },
-  { label: "Status", cell: (i) => <Pill value={i.status} tone={STATUS[i.status]} /> },
-  { label: "Team", cell: (i) => i.assigned_team ?? "Not assigned" },
-  { label: "Reported", cell: (i) => formatTime(i.reported_at) },
+  { label: "Priority", sort: "priority", cell: (i) => <Pill value={i.priority} tone={PRIORITY[i.priority]} /> },
+  { label: "Status", sort: "status", cell: (i) => <Pill value={i.status} tone={STATUS[i.status]} /> },
+  { label: "Team", sort: "team", cell: (i) => i.assigned_team ?? "Not assigned" },
+  { label: "Reported", sort: "reported", cell: (i) => formatTime(i.reported_at) },
 ];
 
 export function Safety() {
@@ -87,15 +87,16 @@ export function Safety() {
   const [params, setParams] = useSearchParams();
   const [openOnly, setOpenOnly] = useState(true);
   const [priority, setPriority] = useState("");
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const [reporting, setReporting] = useState(false);
-  useEffect(() => setPage(1), [openOnly, priority]);
-  const list = usePaged<Incident>(`${base}/incidents`, { open_only: openOnly, priority, page });
+  useEffect(() => setPage(1), [openOnly, priority, sort]);
+  const list = usePaged<Incident>(`${base}/incidents`, { open_only: openOnly, priority, sort, page });
   const summary = useQuery({ queryKey: ["incident-summary", base], queryFn: () => api<Summary>(`${base}/incidents/summary`) });
   const opened = params.get("open");
   return (
     <div>
-      <PageHead title="Safety & Incidents" subtitle="FestOS tracks and notifies. Emergency decisions stay with the Safety Coordinator and Director.">
+      <PageHead title="Safety & Incidents" simulated subtitle="FestOS tracks and notifies. Emergency decisions stay with the Safety Coordinator and Director.">
         {can("incidents.report") && <button className="button-primary small" onClick={() => setReporting(true)}><TriangleAlert size={16} /> Report incident</button>}
       </PageHead>
       {summary.data && (
@@ -110,7 +111,7 @@ export function Safety() {
         <label className="check"><input type="checkbox" checked={openOnly} onChange={(e) => setOpenOnly(e.target.checked)} /> Open only</label>
         <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value)}><option value="">All priorities</option>{["critical", "high", "medium", "low"].map((p) => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}</select>
       </div>
-      <QueryState query={list}>{list.data && <><DataTable rows={list.data.items} columns={columns} rowKey={(i) => i.code} empty="No incidents match." onRow={(i) => setParams({ open: i.code })} /><Pagination page={list.data.page} pages={list.data.pages} total={list.data.total} onPage={setPage} /></>}</QueryState>
+      <QueryState query={list}>{list.data && <><DataTable rows={list.data.items} columns={columns} rowKey={(i) => i.code} empty="No incidents match." onRow={(i) => setParams({ open: i.code })} sort={sort} onSort={setSort} /><Pagination page={list.data.page} pages={list.data.pages} total={list.data.total} onPage={setPage} /></>}</QueryState>
       {opened && <IncidentDrawer code={opened} onClose={() => setParams({})} />}
       {reporting && <ReportForm onClose={() => setReporting(false)} />}
     </div>

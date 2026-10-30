@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import {
   type Column, DataTable, Dialog, ErrorNote, Facts, Field, PageHead, Pagination, Pill, QueryState, Simulated, Tabs, fromInput, useAction, useDebounced, useFest, usePaged,
@@ -138,37 +139,39 @@ function TaskForm({ onClose }: { onClose: () => void }) {
 }
 
 const columns: Column<VolunteerRow>[] = [
-  { label: "ID", cell: (v) => <span className="mono">{v.code}</span> },
-  { label: "Name", cell: (v) => <strong>{v.name}</strong> },
-  { label: "Department", cell: (v) => v.department ?? "None" },
+  { label: "ID", sort: "code", cell: (v) => <span className="mono">{v.code}</span> },
+  { label: "Name", sort: "name", cell: (v) => <strong>{v.name}</strong> },
+  { label: "Department", sort: "department", cell: (v) => v.department ?? "None" },
   { label: "Skills", cell: (v) => v.skills.join(", ") },
-  { label: "Shifts", cell: (v) => v.shifts, className: "num" },
-  { label: "Status", cell: (v) => <Pill value={v.status} tone={v.status === "active" ? "ok" : "warn"} /> },
+  { label: "Shifts", sort: "shifts", cell: (v) => v.shifts, className: "num" },
+  { label: "Status", sort: "status", cell: (v) => <Pill value={v.status} tone={v.status === "active" ? "ok" : "warn"} /> },
 ];
 
 export function Volunteers() {
   const { base, can } = useFest();
   const write = can("volunteers.write");
-  const [tab, setTab] = useState<"directory" | "understaffed" | "tasks">("directory");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<"directory" | "understaffed" | "tasks">(params.get("tab") === "understaffed" ? "understaffed" : "directory");
   const [search, setSearch] = useState("");
   const [department, setDepartment] = useState("");
   const [taskStatus, setTaskStatus] = useState("");
+  const [sort, setSort] = useState("");
   const [page, setPage] = useState(1);
   const [opened, setOpened] = useState<string>();
   const [fill, setFill] = useState<Understaffed>();
   const [adding, setAdding] = useState<"volunteer" | "task" | null>(null);
   const q = useDebounced(search);
-  useEffect(() => setPage(1), [tab, q, department, taskStatus]);
-  const list = usePaged<VolunteerRow>(`${base}/volunteers`, { q, department, page }, tab === "directory");
+  useEffect(() => setPage(1), [tab, q, department, taskStatus, sort]);
+  const list = usePaged<VolunteerRow>(`${base}/volunteers`, { q, department, sort, page }, tab === "directory");
   const tasks = usePaged<TaskRow>(`${base}/tasks`, { department, status: taskStatus, page }, tab === "tasks");
   const short = useQuery({ queryKey: ["understaffed", base], queryFn: () => api<Understaffed[]>(`${base}/volunteers/understaffed`) });
   const moveTask = useAction(({ id, status }: { id: number; status: string }) => api(`${base}/tasks/${id}?status=${status}`, { method: "PATCH" }), { success: "Task updated" });
 
   const shortColumns: Column<Understaffed>[] = [
-    { label: "Event", cell: (e) => <strong>{e.name}</strong> },
-    { label: "Starts", cell: (e) => (e.start_at ? formatTime(e.start_at) : "Not scheduled") },
-    { label: "Staffed", cell: (e) => `${e.staffed} / ${e.needed}`, className: "num" },
-    { label: "Short by", cell: (e) => <span className="warn-text">{e.short}</span>, className: "num" },
+    { label: "Event", value: (e) => e.name, cell: (e) => <strong>{e.name}</strong> },
+    { label: "Starts", value: (e) => e.start_at, cell: (e) => (e.start_at ? formatTime(e.start_at) : "Not scheduled") },
+    { label: "Staffed", value: (e) => e.staffed, cell: (e) => `${e.staffed} / ${e.needed}`, className: "num" },
+    { label: "Short by", value: (e) => e.short, cell: (e) => <span className="warn-text">{e.short}</span>, className: "num" },
     { label: "Actions", cell: (e) => <button className="button-ghost" disabled={!e.start_at} onClick={() => setFill(e)}>Find replacements</button> },
   ];
   const taskColumns: Column<TaskRow>[] = [
@@ -179,12 +182,11 @@ export function Volunteers() {
         <option value="todo">To do</option><option value="in_progress">In progress</option><option value="done">Done</option>
       </select>
     ) : <Pill value={t.status} />) },
-    { label: "Source", cell: (t) => (t.is_simulated ? <Simulated /> : "") },
   ];
 
   return (
     <div>
-      <PageHead title="Volunteers" subtitle="Shifts and most volunteers are simulated: the pack lists only 6 core team volunteers">
+      <PageHead title="Volunteers" simulated subtitle="Shifts, tasks and most volunteers are simulated: the pack lists only 6 core team volunteers">
         {write && <><button className="button-ghost" onClick={() => setAdding("task")}><Plus size={16} /> Add task</button><button className="button-primary small" onClick={() => setAdding("volunteer")}><Plus size={16} /> Add volunteer</button></>}
       </PageHead>
       <Tabs value={tab} onChange={setTab} options={[["directory", "Directory"], ["understaffed", `Understaffed (${short.data?.length ?? 0})`], ["tasks", "Tasks"]]} />
@@ -196,7 +198,7 @@ export function Volunteers() {
         </div>
       )}
       <ErrorNote error={moveTask.error} />
-      {tab === "directory" && <QueryState query={list}>{list.data && <><DataTable rows={list.data.items} columns={columns} rowKey={(v) => v.code} empty="No volunteers match." onRow={(v) => setOpened(v.code)} /><Pagination page={list.data.page} pages={list.data.pages} total={list.data.total} onPage={setPage} /></>}</QueryState>}
+      {tab === "directory" && <QueryState query={list}>{list.data && <><DataTable rows={list.data.items} columns={columns} rowKey={(v) => v.code} empty="No volunteers match." onRow={(v) => setOpened(v.code)} sort={sort} onSort={setSort} /><Pagination page={list.data.page} pages={list.data.pages} total={list.data.total} onPage={setPage} /></>}</QueryState>}
       {tab === "understaffed" && <QueryState query={short}>{short.data && <DataTable rows={short.data} columns={shortColumns} rowKey={(e) => e.code} empty="Every event is fully staffed." />}</QueryState>}
       {tab === "tasks" && <QueryState query={tasks}>{tasks.data && <><DataTable rows={tasks.data.items} columns={taskColumns} rowKey={(t) => t.id} empty="No tasks match." /><Pagination page={tasks.data.page} pages={tasks.data.pages} total={tasks.data.total} onPage={setPage} /></>}</QueryState>}
       {opened && <VolunteerDrawer code={opened} onClose={() => setOpened(undefined)} />}
