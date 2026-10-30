@@ -1,125 +1,101 @@
-# FestOS — Architecture
+# FestOS Command: Architecture
 
-Internal control portal for **Aarohan** (Epinoia 2026, IIM Indore).
-Not a registration site — a back-office decision system for organizers.
+One command center for Aarohan (Epinoia 2026). The Ripple Simulator is the core
+of the product: every important change is previewed against connected records
+before it is committed.
 
-> Guiding principle: **store rows → make defensible, explainable decisions.**
-> Every assumption, conflict, trade-off and override must be *visible*.
+This replaces the earlier Next.js/Prisma outline. `src/`, `prisma/` and
+`scripts/ingest.py` are superseded and not used by the running app.
 
----
+## Stack
 
-## 1. Stack (recommended)
-
-| Layer | Choice | Why |
+| Layer | Choice | Note |
 |---|---|---|
-| App | **Next.js 14 (App Router) + TypeScript** | One repo, UI + API together, fast to ship in 24h |
-| DB | **SQLite via Prisma** | Zero-setup, local-run acceptable, easy audit/migrations |
-| UI | **Tailwind + shadcn/ui** | Clean organizer dashboards fast |
-| Validation | **Zod** | Import validation + typed boundaries |
-| Auth | **NextAuth (credentials) or lightweight JWT** | Role-based access + test credentials |
-| Charts/tables | **TanStack Table + Recharts** | Dense organizer views |
+| Frontend | React + TypeScript + Vite, port 3000 | Proxies `/api` to the backend, so the session cookie stays same-origin |
+| Backend | FastAPI, SQLAlchemy 2, port 8000 | Business logic lives in services, not routes |
+| Database | PostgreSQL 16 in Docker | Alembic migrations |
+| Auth | Local signed sessions | All token logic is in `app/auth/verifier.py`, the one file Firebase replaces |
+| Simulation | Deterministic graph traversal over SQL | No LLM calculates impacts |
 
-> Swappable. The brief judges *decisions*, not the stack. If the team is stronger
-> in Python, the engines (`/engines`) can move to a FastAPI service and Next.js
-> stays the UI — the layer boundaries below hold either way.
-
----
-
-## 2. Layered architecture
+## Layout
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  UI  (organizer dashboards, role-gated)                   │
-│  dashboard · participants · accommodation · scheduling    │
-│  inventory · vendors · audit                              │
-└───────────────┬───────────────────────────────────────────┘
-                │ API route handlers (/app/api)
-┌───────────────▼───────────────────────────────────────────┐
-│  DECISION ENGINES                                           │
-│  accommodation · scheduling · inventory · vendors           │
-│  alerts (control tower) · disruptions                       │
-│  → each returns: result + violated/relaxed constraints +    │
-│    trade-offs + required-reason flags                       │
-└───────────────┬───────────────────────────────────────────┘
-┌───────────────▼───────────────────────────────────────────┐
-│  DOMAIN MODEL  (typed entities + relationships)            │
-└───────────────┬───────────────────────────────────────────┘
-┌───────────────▼───────────┐   ┌────────────────────────────┐
-│  INGESTION & RECONCILE      │   │  AUDIT & OVERRIDE LEDGER    │
-│  parse · validate · dedup   │   │  every mutation: actor,     │
-│  flag · preserve uncertainty│   │  reason, before/after       │
-└───────────────┬───────────┘   └──────────────┬─────────────┘
-┌───────────────▼───────────────────────────────▼───────────┐
-│  DATA (SQLite / Prisma)  +  /data/raw (11 source CSVs)     │
-└─────────────────────────────────────────────────────────────┘
+docker-compose.yml        PostgreSQL
+.env.example              Copy to .env; .env is gitignored
+backend/
+  alembic/                Migrations
+  app/
+    api/                  Routes only: validate, authorize, call a service
+    auth/                 verifier (tokens), permissions (role matrix), deps
+    analytics/            Dashboard metrics, computed from SQL
+    database/             Engine, session, Base
+    models/               SQLAlchemy tables
+    schemas/              Request and response shapes
+    services/             Pack import, schedule planner, simulated data
+    simulation/           Dependency engine and Ripple Simulator (Phase 3)
+    notifications/        Phase 4
+  scripts/seed.py         Loads the festival
+  tests/
+frontend/src/
+  components/  pages/  lib/  styles/
 ```
 
----
+## Data provenance
 
-## 3. Core design decisions
+Three kinds of data sit side by side, and the UI always labels which is which.
 
-### 3.1 Data is imperfect — treat it as evidence, not truth
-- Narrative says ~2,400 participants; `participants.csv` has **2,836 rows**.
-  The ingestion layer **reconciles and flags**, never silently drops.
-- Every imported record carries **data-quality flags** (`duplicate_suspected`,
-  `missing_gender`, `timing_anomaly`, `cross_file_conflict`, `unverified`).
-- **A blank field is never consent, eligibility, gender, dietary clearance or
-  "no need."** Blanks become explicit `UNKNOWN` requiring human resolution.
+| Label | Meaning | Examples |
+|---|---|---|
+| `pack` | Taken from the data pack | Participants, registrations, venues, rooms, vendors, inventory |
+| `generated` | Computed by our planner from pack data | Event times and venue assignment |
+| `simulated` | Invented for the demo because the pack has none. Rows carry `is_simulated = true` | Vehicles, routes, shifts, tasks, budgets, expenses, sponsors, incidents |
 
-### 3.2 Hard vs soft constraints (accommodation)
-Engines separate constraints that **cannot** be traded from those that can:
-- **HARD** (never auto-violated): accessibility needs, declared gender-segregation,
-  room capacity/readiness, check-in/out windows, budget (unless authorized override).
-- **SOFT** (optimized, trade-offs shown): contingent cohesion, leader proximity,
-  escort placement, travel-time comfort, cost minimization.
-- Output is never "the answer" — it's a **recommendation + a list of what was
-  violated or relaxed**, with a required reason for any high-risk override.
+Rules:
+- A blank in the pack stays `NULL`. It never becomes a default.
+- Nothing is invented to fill a pack gap on a real record. Participants have no
+  email or department in the pack, so those stay empty.
+- If a chart's source data does not exist, we change the chart and say so.
+  Registration trends became arrivals over time, because the pack has no
+  registration timestamps.
 
-### 3.3 Everything mutating is audited
-One append-only event log. Overrides additionally require a typed **reason** and
-record before/after state. This powers both the privacy/audit scoring and the
-"explain why a decision was made" mandate.
+## Multi-festival scoping
 
-### 3.4 Changes propagate (the live-test requirement)
-The **disruption engine** applies a state change (late contingent, hostel closure,
-equipment failure, venue change, vendor shutdown, duplicate merch claim) and then
-**recomputes downstream** (accommodation → transport → events → food → merch) and
-returns a **consequence report** the control tower surfaces. A change is only
-"complete" when its downstream effects are visible.
+Every operational table carries `festival_id`. Routes take the festival from the
+path, and `festival_access` rejects users who do not belong to that festival.
 
----
+## Permissions
 
-## 4. Module responsibilities
+`roles`, `permissions` and `role_permissions` are seeded from the matrix in
+`app/auth/permissions.py`. Routes declare what they need with
+`require("finance.read")`. The frontend hides what a role cannot use, but the
+server is what enforces it. Contact, accessibility and medical details sit
+behind `participants.read_sensitive`.
 
-| Module | Owns |
-|---|---|
-| **ingestion** | Parse each CSV, validate (Zod), dedup, reconcile counts, attach quality flags |
-| **domain** | Entity types + relationships (participant ↔ contingent ↔ events ↔ room ↔ merch ↔ food) |
-| **engines/accommodation** | Hard/soft allocator, shortage exposure, cost-vs-cohesion explanation |
-| **engines/scheduling** | Conflict detection: participant clash, team, judge, volunteer, venue capacity, equipment, setup/teardown/travel |
-| **engines/inventory** | Time- & location-aware stock; merch issued **once** per person; reserved/in-transit/damaged/return states |
-| **engines/vendors** | Dietary coverage, hygiene compliance, operating hours/capacity, interruption gaps, settlement |
-| **engines/alerts** | Control-tower rules: what needs attention *before* someone calls the director |
-| **engines/disruptions** | Apply disruption → recompute downstream → consequence report |
-| **audit** | Append-only event log + override ledger (actor, reason, before/after) |
-| **auth** | Roles (director, module leads, volunteer, read-only) + protected sensitive fields |
+## Audit
 
----
+`audit_logs` is append-only, enforced by a database trigger that rejects UPDATE
+and DELETE. The dashboard feed reads from this table.
 
-## 5. Sensitive-data handling (privacy scoring)
-- Fields `contact`, `medical`, `accessibility`, `room` are **classified sensitive**
-  and gated by role; redacted in lower-privilege views and in logs.
-- Validation at every import and mutation boundary.
-- Full audit history; manual overrides always carry a reason.
+## Ripple Simulator (Phase 3)
 
----
+Dependency graph:
+Participants, Events, Venues, Volunteers, Transportation, Accommodation, Finance.
 
-## 6. Data flow summary
-1. Drop 11 CSVs into `/data/raw`.
-2. `ingestion` parses → validates → dedups → reconciles → writes to SQLite with flags.
-3. Organizer opens a module; API calls the relevant **engine**.
-4. Engine returns `{ result, violations, relaxations, tradeoffs, needsReason }`.
-5. Organizer acts; mutation goes through `audit` (+ reason if override).
-6. `disruptions` / `alerts` recompute and the **control tower** shows consequences.
+- **Preview** reads current state, traverses structured relationships, and stores
+  a report in `simulations` and `simulation_impacts`. Production rows are not
+  touched. The report stores a hash of the state it read.
+- **Commit** requires `simulation.approve`, recomputes that hash, refuses if the
+  data has moved on, then applies the change in one transaction with audit rows
+  and notifications.
+- Every impact is marked as a verified fact or an estimate.
 
-See **PLAN.md** for the 24-hour build sequence.
+## Phases
+
+1. Foundation: setup, auth, database, roles, festival config, Command Center
+2. Core operations: events, participants, venues, accommodation, transport, volunteers
+3. Dependency engine, Ripple Simulator, approval workflow, audit history
+4. AI assistant, notifications, analytics, reports
+5. Security testing, responsive polish, performance, integration tests, deployment
+
+See `docs/DATA_FINDINGS.md` for what the pack contains and `docs/ASSUMPTIONS.md`
+for every assumption the build depends on.

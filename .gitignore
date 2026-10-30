@@ -7,3 +7,11 @@ data/quality_report.json
 node_modules/
 .next/
 dist/
+
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
