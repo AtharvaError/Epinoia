@@ -266,10 +266,10 @@ export function Merchandise() {
 
   const sum = summaryQuery.data;
 
-  // Keep URL in sync
-  useEffect(() => {
-    setParams({ tab }, { replace: true });
-  }, [tab, setParams]);
+  const handleTabChange = (newTab: "desk" | "distribution" | "stock" | "owed" | "ledger") => {
+    setTab(newTab);
+    setParams({ tab: newTab }, { replace: true });
+  };
 
   return (
     <div>
@@ -344,7 +344,7 @@ export function Merchandise() {
       {/* 5 Tabs */}
       <Tabs
         value={tab}
-        onChange={setTab}
+        onChange={handleTabChange}
         options={[
           ["desk", "Issue desk"],
           ["distribution", `Distribution plan ${sum?.config.plan_stale ? "⚠️ Stale" : ""}`],

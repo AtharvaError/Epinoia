@@ -1037,6 +1037,10 @@ def list_requests(
         })
     return {
         "items": rows,
+        "total": len(rows),
+        "page": 1,
+        "pages": 1,
+        "page_size": len(rows),
         "open_transfers": open_transfers,
         "counts": {
             s: sum(1 for r in rows if r["status"] == s)
@@ -2266,7 +2270,9 @@ def list_campus_stock(
         result.append({
             "item": item_name,
             "total": tot_sum,
+            "total_quantity": tot_sum,
             "good": good_sum,
+            "good_available": deployable_sum,
             "committed": committed_sum,
             "deployable": deployable_sum,
             "in_transit": in_transit_sum,
@@ -2277,7 +2283,13 @@ def list_campus_stock(
             "shortage": short_val,
             "locations": list(loc_buckets.values()),
         })
-    return {"items": result}
+    return {
+        "items": result,
+        "total": len(result),
+        "page": 1,
+        "pages": 1,
+        "page_size": len(result),
+    }
 
 
 @router.get("/stock/{item}", dependencies=[Depends(require("equipment.read"))])
@@ -2756,7 +2768,14 @@ def list_ledger(
     db: Session = Depends(get_db),
 ):
     rows = list(db.scalars(filtered_ledger_query(festival.id, item, location, event_code, action, actor, q).limit(limit)))
-    return {"items": [ledger_row(m) for m in rows]}
+    items = [ledger_row(m) for m in rows]
+    return {
+        "items": items,
+        "total": len(items),
+        "page": 1,
+        "pages": 1,
+        "page_size": len(items),
+    }
 
 
 @router.get("/ledger/export.csv", dependencies=[Depends(require("equipment.read"))])

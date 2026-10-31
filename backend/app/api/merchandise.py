@@ -2482,7 +2482,13 @@ def list_owed(
         })
 
     out.sort(key=lambda x: (x["departure_at"] is None, x["departure_at"] or datetime.max.replace(tzinfo=timezone.utc), x["recipient_code"]))
-    return {"items": out}
+    return {
+        "items": out,
+        "total": len(out),
+        "page": 1,
+        "pages": 1,
+        "page_size": len(out),
+    }
 
 
 @router.get("/owed/export.csv", dependencies=[Depends(require("merch.read"))])
@@ -2611,25 +2617,30 @@ def list_merch_ledger(
     db: Session = Depends(get_db),
 ):
     rows = list(db.scalars(merch_ledger_query(festival.id, item, size, action, actor, exceptions_only, q).limit(limit)))
+    items = [
+        {
+            "id": m.id,
+            "action": m.action,
+            "item": m.item,
+            "size": m.size,
+            "quantity": m.qty_delta,
+            "participant_code": m.participant_code,
+            "participant_name": m.participant_name,
+            "desk": m.desk,
+            "is_exception": m.is_exception,
+            "actor_name": m.actor_name,
+            "status": m.status,
+            "reason": m.reason,
+            "created_at": m.created_at,
+        }
+        for m in rows
+    ]
     return {
-        "items": [
-            {
-                "id": m.id,
-                "action": m.action,
-                "item": m.item,
-                "size": m.size,
-                "quantity": m.qty_delta,
-                "participant_code": m.participant_code,
-                "participant_name": m.participant_name,
-                "desk": m.desk,
-                "is_exception": m.is_exception,
-                "actor_name": m.actor_name,
-                "status": m.status,
-                "reason": m.reason,
-                "created_at": m.created_at,
-            }
-            for m in rows
-        ]
+        "items": items,
+        "total": len(items),
+        "page": 1,
+        "pages": 1,
+        "page_size": len(items),
     }
 
 

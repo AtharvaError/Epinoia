@@ -99,3 +99,4 @@ export function QrScanner({
     </div>
   );
 }
+

@@ -237,7 +237,13 @@ export function Shell({ user }: { user: User }) {
   const [festivalId, setFestivalId] = useState(rememberedFestival);
   const festivals = useQuery({ queryKey: ["festivals"], queryFn: () => api<Festival[]>("/api/festivals") });
   const festival = festivals.data?.find((f) => f.id === festivalId) ?? festivals.data?.[0];
-  const allowed = NAV.map(({ group, items }) => ({ group, items: items.filter((item) => user.permissions.includes(item.permission)) })).filter((g) => g.items.length);
+  const hasPerm = (p: string) => {
+    if (user.permissions.includes(p)) return true;
+    if (p === "equipment.read" && user.permissions.includes("transport.read")) return true;
+    if (p === "merch.read" && (user.permissions.includes("transport.read") || user.permissions.includes("participants.read"))) return true;
+    return false;
+  };
+  const allowed = NAV.map(({ group, items }) => ({ group, items: items.filter((item) => hasPerm(item.permission)) })).filter((g) => g.items.length);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [conversation, setConversation] = useState<Message[]>([]);

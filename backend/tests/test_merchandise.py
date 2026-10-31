@@ -137,3 +137,4 @@ def test_undo_and_size_substitution_rules():
     # With consent recorded, substitution succeeds
     sub_ok = desk.post(f"{base}/issue", json={"recipient_code": p_code, "item": "T-shirt", "size": "XXL", "consent_recorded": True}).json()
     assert sub_ok["status"] == "issued"
+

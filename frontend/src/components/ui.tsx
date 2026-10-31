@@ -167,13 +167,13 @@ export function DataTable<T>({ rows, columns, rowKey, onRow, empty, sort, onSort
   );
 }
 
-export function Pagination({ page, pages, total, onPage }: { page: number; pages: number; total: number; onPage: (p: number) => void }) {
+export function Pagination({ page = 1, pages = 1, total = 0, onPage }: { page?: number; pages?: number; total?: number; onPage: (p: number) => void }) {
   return (
     <div className="pagination">
-      <span className="muted small">{total.toLocaleString("en-IN")} total</span>
-      <button className="button-ghost" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
-      <span className="small">Page {page} of {pages}</span>
-      <button className="button-ghost" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+      <span className="muted small">{(total ?? 0).toLocaleString("en-IN")} total</span>
+      <button className="button-ghost" disabled={(page ?? 1) <= 1} onClick={() => onPage((page ?? 1) - 1)}>Previous</button>
+      <span className="small">Page {page ?? 1} of {Math.max(1, pages ?? 1)}</span>
+      <button className="button-ghost" disabled={(page ?? 1) >= (pages ?? 1)} onClick={() => onPage((page ?? 1) + 1)}>Next</button>
     </div>
   );
 }

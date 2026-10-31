@@ -6,7 +6,7 @@ import {
   Search,
   Truck,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -125,6 +125,7 @@ export function Transport() {
   // Handle attention strip chip click
   const handleAttentionClick = (targetTab: "requests" | "stock" | "transfers", filter?: string) => {
     setTab(targetTab);
+    setParams({ tab: targetTab }, { replace: true });
     if (targetTab === "requests") {
       setReqStatus(filter === "shortage" ? "submitted" : filter ?? "");
     } else if (targetTab === "stock") {
@@ -134,10 +135,11 @@ export function Transport() {
     }
   };
 
-  // Keep URL in sync
-  useEffect(() => {
-    setParams({ tab }, { replace: true });
-  }, [tab, setParams]);
+  // Tab change handler
+  const handleTabChange = (targetTab: "requests" | "stock" | "transfers" | "ledger") => {
+    setTab(targetTab);
+    setParams({ tab: targetTab }, { replace: true });
+  };
 
   // Request Columns
   const requestColumns: Column<EquipmentRequestRow>[] = [
@@ -201,23 +203,23 @@ export function Transport() {
       label: "Condition Breakdown",
       cell: (s) => (
         <ConditionSegmentedBar
-          good={s.good_available}
-          needsCheck={s.needs_check}
-          underRepair={s.under_repair}
-          total={s.total_quantity}
+          good={s.good_available ?? (s as any).good ?? 0}
+          needsCheck={s.needs_check ?? 0}
+          underRepair={s.under_repair ?? 0}
+          total={s.total_quantity ?? (s as any).total ?? 0}
         />
       ),
     },
-    { label: "Total Units", cell: (s) => s.total_quantity, className: "num" },
-    { label: "Good Free", cell: (s) => <strong style={{ color: "#34d399" }}>{s.good_available}</strong>, className: "num" },
-    { label: "Committed", cell: (s) => s.committed, className: "num" },
-    { label: "Needs Check", cell: (s) => <span style={{ color: s.needs_check > 0 ? "#fbbf24" : "inherit" }}>{s.needs_check}</span>, className: "num" },
-    { label: "Under Repair", cell: (s) => <span style={{ color: s.under_repair > 0 ? "#f87171" : "inherit" }}>{s.under_repair}</span>, className: "num" },
+    { label: "Total Units", cell: (s) => s.total_quantity ?? (s as any).total ?? 0, className: "num" },
+    { label: "Good Free", cell: (s) => <strong style={{ color: "#34d399" }}>{s.good_available ?? (s as any).good ?? 0}</strong>, className: "num" },
+    { label: "Committed", cell: (s) => s.committed ?? 0, className: "num" },
+    { label: "Needs Check", cell: (s) => <span style={{ color: (s.needs_check ?? 0) > 0 ? "#fbbf24" : "inherit" }}>{s.needs_check ?? 0}</span>, className: "num" },
+    { label: "Under Repair", cell: (s) => <span style={{ color: (s.under_repair ?? 0) > 0 ? "#f87171" : "inherit" }}>{s.under_repair ?? 0}</span>, className: "num" },
     {
       label: "Location Distribution",
       cell: (s) => (
         <small className="muted">
-          {s.locations.map((l) => `${l.location}: ${l.quantity}`).join(" · ")}
+          {(s.locations ?? []).map((l) => `${l.location}: ${l.quantity}`).join(" · ")}
         </small>
       ),
     },
@@ -321,11 +323,11 @@ export function Transport() {
       {/* 4 Tabs with Badges */}
       <Tabs
         value={tab}
-        onChange={setTab}
+        onChange={handleTabChange}
         options={[
-          ["requests", `Equipment requests (${summaryQuery.data?.counts.open_requests ?? 0})`],
-          ["stock", `Campus stock (${summaryQuery.data?.counts.stock_items ?? 18})`],
-          ["transfers", `Transfers (${summaryQuery.data?.counts.open_transfers ?? 0})`],
+          ["requests", `Equipment requests (${summaryQuery.data?.counts?.open_requests ?? 0})`],
+          ["stock", `Campus stock (${summaryQuery.data?.counts?.stock_items ?? 18})`],
+          ["transfers", `Transfers (${summaryQuery.data?.counts?.open_transfers ?? 0})`],
           ["ledger", "Movement history"],
         ]}
       />
