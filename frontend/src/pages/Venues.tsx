@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   type Column, DataTable, Dialog, ErrorNote, Facts, Field, PageHead, Pagination, Pill, QueryState, Tabs, useAction, useDebounced, useFest, usePaged,
@@ -64,33 +65,18 @@ function VenueDrawer({ venue, onClose }: { venue: VenueRow; onClose: () => void 
 
 function ResourceDialog({ existing, onClose }: { existing?: ResourceRow; onClose: () => void }) {
   const { base } = useFest();
-  const [form, setForm] = useState({ name: existing?.name ?? "", kind: existing?.kind ?? "logistics", size: existing?.size ?? "", quantity: String(existing?.quantity ?? 1), location: existing?.location ?? "", condition: existing?.condition ?? "good" });
-  const [allot, setAllot] = useState({ event_code: "", quantity: "1" });
+  const [form, setForm] = useState({ name: existing?.name ?? "", kind: existing?.kind ?? "venue_asset", size: existing?.size ?? "", quantity: String(existing?.quantity ?? 1), location: existing?.location ?? "", condition: existing?.condition ?? "good" });
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [key]: e.target.value });
-  const events = useQuery({ queryKey: ["participant-options", base], queryFn: () => api<{ events: { code: string; name: string }[] }>(`${base}/participants/filters`) });
   const save = useAction(() => api(existing ? `${base}/resources/${existing.code}` : `${base}/resources`, { method: existing ? "PATCH" : "POST", body: JSON.stringify({ ...form, quantity: Number(form.quantity), size: form.size || null, location: form.location || null }) }), { success: "Resource saved", onDone: onClose });
-  const allocate = useAction(() => api(`${base}/resources/${existing!.code}/allocate`, { method: "POST", body: JSON.stringify({ event_code: allot.event_code, quantity: Number(allot.quantity) }) }), { success: "Allocated to the event", onDone: onClose });
   return (
-    <Dialog title={existing ? `${existing.name} · ${existing.code}` : "Add resource"} onClose={onClose}>
+    <Dialog title={existing ? `${existing.name} · ${existing.code}` : "Add fixed venue resource"} onClose={onClose}>
       <form className="form form-grid" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
         <Field label="Name"><input required minLength={2} value={form.name} onChange={set("name")} /></Field>
         <Field label="Quantity"><input type="number" min={0} required value={form.quantity} onChange={set("quantity")} /></Field>
-        <Field label="Location"><input value={form.location} onChange={set("location")} /></Field>
+        <Field label="Venue Location"><input value={form.location} onChange={set("location")} /></Field>
         <Field label="Condition"><select value={form.condition} onChange={set("condition")}><option value="good">Good</option><option value="needs check">Needs check</option><option value="under repair">Under repair</option></select></Field>
         <div className="span-all"><ErrorNote error={save.error} /><button className="button-primary" disabled={save.isPending}>Save resource</button></div>
       </form>
-      {existing && (
-        <form className="form" onSubmit={(e) => { e.preventDefault(); allocate.mutate(); }}>
-          <h3>Allocate to an event</h3>
-          <p className="muted small">{existing.available} available. Stock that is not in good condition cannot be allocated.</p>
-          <div className="inline-form">
-            <select aria-label="Event" required value={allot.event_code} onChange={(e) => setAllot({ ...allot, event_code: e.target.value })}><option value="">Choose event</option>{events.data?.events.map((e) => <option key={e.code} value={e.code}>{e.name}</option>)}</select>
-            <input aria-label="Quantity" type="number" min={1} required value={allot.quantity} onChange={(e) => setAllot({ ...allot, quantity: e.target.value })} />
-            <button className="button-secondary" disabled={allocate.isPending}>Allocate</button>
-          </div>
-          <ErrorNote error={allocate.error} />
-        </form>
-      )}
     </Dialog>
   );
 }
@@ -123,12 +109,12 @@ export function Venues() {
   const venue = venues.data?.find((v) => v.code === selected);
   return (
     <div>
-      <PageHead title="Venues & Resources" subtitle="Availability is computed from condition and reservations">
+      <PageHead title="Venues & Resources" subtitle="Fixed campus venues, capacities, and maintenance status">
         {can("venues.write") && (tab === "venues"
           ? <button className="button-primary small" onClick={() => setAddVenue(true)}><Plus size={16} /> Add venue</button>
           : <button className="button-primary small" onClick={() => setResource("new")}><Plus size={16} /> Add resource</button>)}
       </PageHead>
-      <Tabs value={tab} onChange={setTab} options={[["venues", "Venues"], ["resources", "Resources"]]} />
+      <Tabs value={tab} onChange={setTab} options={[["venues", "Venues"], ["resources", "Venue Assets"]]} />
       {tab === "venues" && (
         <QueryState query={venues}>
           <div className="card-grid">
@@ -145,6 +131,11 @@ export function Venues() {
       )}
       {tab === "resources" && (
         <>
+          <div className="callout small" style={{ marginBottom: 12 }}>
+            Movable equipment requests, multi-location stock balances, and logistics transfers are managed centrally in{" "}
+            <Link to="/transportation" style={{ fontWeight: 600 }}>Inventory Control</Link>. Merchandise is managed in{" "}
+            <Link to="/merchandise" style={{ fontWeight: 600 }}>Merchandise</Link>.
+          </div>
           <div className="filters">
             <input type="search" aria-label="Search resources" placeholder="Search item or ID" value={search} onChange={(e) => setSearch(e.target.value)} />
             <select aria-label="Type" value={kind} onChange={(e) => setKind(e.target.value)}><option value="">All types</option><option value="logistics">Logistics</option><option value="merch">Merchandise</option></select>
@@ -156,7 +147,7 @@ export function Venues() {
         </>
       )}
       {venue && <VenueDrawer venue={venue} onClose={() => setSelected(undefined)} />}
-      {addVenue && <Dialog title="Add venue" onClose={() => setAddVenue(false)}><VenueForm onDone={() => setAddVenue(false)} /></Dialog>}
+      {addVenue && <Dialog title="Add venue" onClose={() => setAddVenue(false)} side><VenueForm onDone={() => setAddVenue(false)} /></Dialog>}
       {resource && <ResourceDialog existing={resource === "new" ? undefined : resource} onClose={() => setResource(null)} />}
     </div>
   );

@@ -1,64 +1,17 @@
 import { Camera as CameraIcon, CircleCheck, CircleX, ScanLine, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
+import { QrScanner } from "../components/QrScanner";
 import { ErrorNote, Field, Moment, useAction, useFest } from "../components/ui";
 import { api } from "../lib/api";
 
-interface Pass { valid: boolean; code?: string; full_name?: string; college?: string; checkin_status?: string; registration_status?: string }
-
-const SCAN_EVERY_MS = 150;
-const SCAN_WIDTH = 640;
-
-/** Reads QR codes from the rear camera. jsQR loads here so no other page pays for it. */
-function Camera({ onCode }: { onCode: (code: string) => void }) {
-  const video = useRef<HTMLVideoElement>(null);
-  const [problem, setProblem] = useState("");
-  useEffect(() => {
-    let stream: MediaStream | undefined;
-    let timer: ReturnType<typeof setTimeout>;
-    let stopped = false;
-    const start = async () => {
-      if (!navigator.mediaDevices) {
-        setProblem("Camera access needs a secure connection (HTTPS). Type the pass code below instead.");
-        return;
-      }
-      try {
-        const [{ default: jsQR }, media] = await Promise.all([import("jsqr"), navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })]);
-        stream = media;
-        if (stopped || !video.current) return;
-        video.current.srcObject = media;
-        await video.current.play();
-        const canvas = document.createElement("canvas");
-        const context = canvas.getContext("2d", { willReadFrequently: true })!;
-        const scan = () => {
-          const frame = video.current;
-          if (stopped || !frame) return;
-          if (frame.videoWidth) {
-            canvas.width = Math.min(SCAN_WIDTH, frame.videoWidth);
-            canvas.height = Math.round((frame.videoHeight / frame.videoWidth) * canvas.width);
-            context.drawImage(frame, 0, 0, canvas.width, canvas.height);
-            const found = jsQR(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
-            if (found?.data) {
-              onCode(found.data);
-              return;
-            }
-          }
-          timer = setTimeout(scan, SCAN_EVERY_MS);
-        };
-        scan();
-      } catch {
-        if (!stopped) setProblem("The camera could not start. Allow camera access, or type the pass code below.");
-      }
-    };
-    start();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-      stream?.getTracks().forEach((track) => track.stop());
-    };
-  }, [onCode]);
-  if (problem) return <p className="form-error" role="alert">{problem}</p>;
-  return <div className="scanner"><video ref={video} muted playsInline aria-label="Camera view for scanning a pass" /><span className="scan-frame" aria-hidden="true" /></div>;
+interface Pass {
+  valid: boolean;
+  code?: string;
+  full_name?: string;
+  college?: string;
+  checkin_status?: string;
+  registration_status?: string;
 }
 
 export function CheckIn() {
@@ -67,14 +20,19 @@ export function CheckIn() {
   const [scanning, setScanning] = useState(false);
   const [done, setDone] = useState<string>();
   const [count, setCount] = useState(0);
-  const verify = useAction((code: string) => api<Pass>(`${base}/passes/verify`, { method: "POST", body: JSON.stringify({ token: code }) }));
-  const checkIn = useAction(() => api<{ full_name: string }>(`${base}/passes/check-in`, { method: "POST", body: JSON.stringify({ token }) }), {
-    onDone: (r) => {
-      setDone(r.full_name);
-      setCount((n) => n + 1);
-      verify.reset();
-    },
-  });
+  const verify = useAction((code: string) =>
+    api<Pass>(`${base}/passes/verify`, { method: "POST", body: JSON.stringify({ token: code }) })
+  );
+  const checkIn = useAction(
+    () => api<{ full_name: string }>(`${base}/passes/check-in`, { method: "POST", body: JSON.stringify({ token }) }),
+    {
+      onDone: (r) => {
+        setDone(r.full_name);
+        setCount((n) => n + 1);
+        verify.reset();
+      },
+    }
+  );
   const pass = verify.data;
 
   const read = useRef((code: string) => {
@@ -132,8 +90,13 @@ export function CheckIn() {
       )}
       <ErrorNote error={verify.error || checkIn.error} />
 
-      {scanning ? <Camera onCode={read.current} /> : (
-        <button className={pass?.valid && pass.checkin_status !== "checked_in" && pass.registration_status !== "cancelled" ? "button-secondary huge" : "button-primary huge"} onClick={next}>
+      {scanning ? (
+        <QrScanner onCode={read.current} label="Camera view for scanning a pass" />
+      ) : (
+        <button
+          className={pass?.valid && pass.checkin_status !== "checked_in" && pass.registration_status !== "cancelled" ? "button-secondary huge" : "button-primary huge"}
+          onClick={next}
+        >
           {done || pass ? <ScanLine size={22} /> : <CameraIcon size={22} />} {done || pass ? "Scan next" : "Start camera"}
         </button>
       )}

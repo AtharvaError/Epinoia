@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.api import accommodation, analytics, assistant, auth, communication, events, external_stays, festivals, finance, incidents, participants, simulations, transport, users, vendors, venues, volunteers
+from app.api import accommodation, analytics, assistant, auth, communication, equipment, events, external_stays, festivals, finance, incidents, merchandise, participants, simulations, transport, users, vendors, venues, volunteers
 from app.auth.deps import COOKIE, user_from_token
 from app.config import settings
 from app.database import SessionLocal
@@ -47,7 +47,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 production = settings.environment == "production"
 app = FastAPI(title="FestOS Command API", docs_url=None if production else DOCS_PATHS[0], openapi_url=None if production else DOCS_PATHS[1], lifespan=lifespan)
-for module in (auth, festivals, users, participants, events, venues, accommodation, transport, vendors, volunteers, simulations, finance, communication, incidents, analytics, assistant, external_stays):
+for module in (auth, festivals, users, participants, events, venues, accommodation, transport, equipment, merchandise, vendors, volunteers, simulations, finance, communication, incidents, analytics, assistant, external_stays):
     app.include_router(module.router)
 
 

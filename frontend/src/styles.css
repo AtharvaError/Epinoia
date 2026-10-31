@@ -1590,3 +1590,210 @@ button.hours-row:hover { background: var(--surface-2); }
     display: none;
   }
 }
+/* ==========================================================================
+   Inventory Control & Merchandise Extensions
+   ========================================================================== */
+
+.attention-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  margin-top: 10px;
+  margin-bottom: 12px;
+}
+.attention-strip .strip-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.attention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: var(--surface);
+  color: var(--text);
+  transition: all 0.15s ease;
+}
+.attention-chip:hover {
+  filter: brightness(1.15);
+}
+.attention-chip.tone-warn {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+}
+.attention-chip.tone-bad {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+}
+.attention-chip.tone-info {
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+}
+.attention-chip.tone-ok {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+}
+
+/* Condition segmented bar */
+.condition-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  min-width: 120px;
+}
+.condition-seg {
+  height: 100%;
+  transition: width 0.2s ease;
+}
+.condition-seg.good { background: #34d399; }
+.condition-seg.check { background: #fbbf24; }
+.condition-seg.repair { background: #f87171; }
+
+/* 5-card Equal Metric Ribbon */
+.kpi-grid-5 {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+@media (max-width: 900px) {
+  .kpi-grid-5 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 540px) {
+  .kpi-grid-5 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Size curve 5-col grid */
+.size-curve-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+@media (max-width: 768px) {
+  .size-curve-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.size-card {
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.size-card.shortage {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.05);
+}
+.size-card.surplus {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.05);
+}
+.size-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+/* Express Desk Privacy Card */
+.express-card {
+  padding: 20px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.express-card.duplicate-blocked {
+  border-color: var(--critical);
+  background: rgba(239, 68, 68, 0.08);
+}
+.express-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+}
+.express-card-name {
+  font: 700 24px/1.2 var(--display);
+}
+
+/* Undo Banner */
+.undo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-radius: var(--radius);
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid #f59e0b;
+  color: #fbbf24;
+  margin-bottom: 14px;
+  animation: slideDown 0.25s ease-out;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Wide Drawer */
+.dialog.drawer-wide {
+  width: min(640px, calc(100vw - 20px));
+}
+
+/* Printable A4 wave tray styles */
+@media print {
+  .tray-sheet-print {
+    padding: 20mm;
+    background: #fff;
+    color: #000;
+    font-family: sans-serif;
+    page-break-after: always;
+  }
+  .tray-sheet-print table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+  }
+  .tray-sheet-print th, .tray-sheet-print td {
+    border: 1px solid #000;
+    padding: 6px 8px;
+    text-align: left;
+    font-size: 11pt;
+  }
+  .tray-sheet-print th {
+    background: #f0f0f0;
+    font-weight: bold;
+  }
+}

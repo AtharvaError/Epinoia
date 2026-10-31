@@ -212,11 +212,13 @@ class Resource(FestivalScoped, Simulated, Base):
     size: Mapped[str | None] = mapped_column(String(10))
     quantity: Mapped[int] = mapped_column(Integer)
     reserved_quantity: Mapped[int] = mapped_column(Integer, server_default="0")
+    in_transit_quantity: Mapped[int] = mapped_column(Integer, server_default="0")
+    version: Mapped[int] = mapped_column(Integer, server_default="1")
     location: Mapped[str | None] = mapped_column(String(120))
     condition: Mapped[str | None] = mapped_column(String(30))
     __table_args__ = (
         UniqueConstraint("festival_id", "code"),
-        CheckConstraint("quantity >= 0 AND reserved_quantity >= 0", name="quantities_valid"),
+        CheckConstraint("quantity >= 0 AND reserved_quantity >= 0 AND in_transit_quantity >= 0", name="quantities_valid"),
     )
 
 
@@ -227,6 +229,38 @@ class ResourceAllocation(FestivalScoped, Base):
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     quantity: Mapped[int] = mapped_column(Integer)
     __table_args__ = (UniqueConstraint("resource_id", "event_id"), CheckConstraint("quantity > 0", name="quantity_valid"))
+
+
+class InventoryLocation(FestivalScoped, Base):
+    """Unified location registry for the 5 campus stock locations and 9 venues."""
+    __tablename__ = "inventory_locations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(24), server_default="stock_only")  # stock_only | venue_and_stock | venue_only
+    venue_id: Mapped[int | None] = mapped_column(ForeignKey("venues.id", ondelete="SET NULL"), index=True)
+    venue_code: Mapped[str | None] = mapped_column(String(20))
+    matched_by_name: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    venue_confirmed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    venue_confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    venue_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    position_unverified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    position_note: Mapped[str | None] = mapped_column(String(240))
+    position_updated_by: Mapped[str | None] = mapped_column(String(120))
+    position_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("festival_id", "name"),)
+
+
+class EquipmentAlias(FestivalScoped, Base):
+    """Plain-data editable alias table mapping event tokens to catalogue items."""
+    __tablename__ = "equipment_aliases"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token: Mapped[str] = mapped_column(String(80))
+    target_item: Mapped[str | None] = mapped_column(String(80))
+    verified: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    verified_by: Mapped[str | None] = mapped_column(String(120))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(20), server_default="pack")  # pack | organizer
+    __table_args__ = (UniqueConstraint("festival_id", "token"),)
 
 
 class Hostel(FestivalScoped, Base):
@@ -304,7 +338,6 @@ class Route(FestivalScoped, Simulated, Base):
     expected_arrival_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), server_default="scheduled")
     delay_minutes: Mapped[int] = mapped_column(Integer, server_default="0")
-    # Approximate stop locations for the route map. NULL when a stop has no known location. Never live GPS.
     pickup_lat: Mapped[float | None] = mapped_column(Float)
     pickup_lng: Mapped[float | None] = mapped_column(Float)
     destination_lat: Mapped[float | None] = mapped_column(Float)
@@ -398,7 +431,6 @@ class Vendor(FestivalScoped, Base):
     capacity: Mapped[int | None] = mapped_column(Integer)
     payment_terms: Mapped[str | None] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(20), server_default="active")
-    # Provenance & manually verified operational fields (never overwrite original CSV data)
     source: Mapped[str] = mapped_column(String(20), server_default="pack")
     original_pack_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     operational_status: Mapped[str] = mapped_column(String(24), server_default="unconfirmed")
@@ -437,6 +469,277 @@ class VendorInterruption(FestivalScoped, Base):
     decided_by_name: Mapped[str | None] = mapped_column(String(120))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class EquipmentRequest(FestivalScoped, Base):
+    """An event's confirmed equipment need. Prefilled from events.csv equipment_needs; quantities confirmed by a person."""
+    __tablename__ = "equipment_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20))
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    item: Mapped[str] = mapped_column(String(60))
+    quantity: Mapped[int] = mapped_column(Integer)
+    destination: Mapped[str] = mapped_column(String(120))
+    destination_verified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    needed_by: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    priority: Mapped[str] = mapped_column(String(10), server_default="normal")
+    notes: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(20), server_default="event_csv")  # event_csv | manual
+    source_text: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(24), server_default="submitted")
+    has_shortage: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    availability_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    requested_by_name: Mapped[str] = mapped_column(String(120))
+    decided_by_name: Mapped[str | None] = mapped_column(String(120))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    lines: Mapped[list["EquipmentRequestLine"]] = relationship(cascade="all, delete-orphan")
+    __table_args__ = (UniqueConstraint("festival_id", "code"), CheckConstraint("quantity > 0", name="quantity_valid"))
+
+
+class EquipmentRequestLine(FestivalScoped, Base):
+    """One category line inside an EquipmentRequest."""
+    __tablename__ = "equipment_request_lines"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("equipment_requests.id", ondelete="CASCADE"), index=True)
+    raw_token: Mapped[str | None] = mapped_column(String(120))
+    item: Mapped[str] = mapped_column(String(60))
+    matched: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    confirmed_qty: Mapped[int] = mapped_column(Integer)
+    qty_source: Mapped[str] = mapped_column(String(30), server_default="organizer")  # events_csv | organizer | venue_suggestion
+    confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    approved_qty: Mapped[int] = mapped_column(Integer, server_default="0")
+    shortage_qty: Mapped[int] = mapped_column(Integer, server_default="0")
+    shortage_decision: Mapped[str | None] = mapped_column(String(40))  # inspect | repair | transfer | source_externally | accept_reduced
+    shortage_decision_qty: Mapped[int | None] = mapped_column(Integer)
+    shortage_decision_note: Mapped[str | None] = mapped_column(Text)
+    shortage_decided_by: Mapped[str | None] = mapped_column(String(120))
+    shortage_decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("confirmed_qty > 0 AND approved_qty >= 0 AND shortage_qty >= 0", name="req_line_qty_valid"),)
+
+
+class EquipmentAllocation(FestivalScoped, Base):
+    """Approved commitment of Good stock from a source location for a request line."""
+    __tablename__ = "equipment_allocations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("equipment_requests.id", ondelete="CASCADE"), index=True)
+    request_line_id: Mapped[int | None] = mapped_column(ForeignKey("equipment_request_lines.id", ondelete="CASCADE"), index=True)
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id"), index=True)
+    item: Mapped[str] = mapped_column(String(60))
+    source_location: Mapped[str] = mapped_column(String(120))
+    destination: Mapped[str] = mapped_column(String(120))
+    qty: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), server_default="allocated")  # allocated | dispatched | in_transit | received | partially_received | returned | released
+    is_in_place: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    needs_check_exception: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    exception_by: Mapped[str | None] = mapped_column(String(120))
+    exception_reason: Mapped[str | None] = mapped_column(Text)
+    commitment_scope: Mapped[str] = mapped_column(String(40), server_default="held for entire fest")
+    __table_args__ = (CheckConstraint("qty > 0", name="alloc_qty_valid"),)
+
+
+class EquipmentTransfer(FestivalScoped, Base):
+    """Quantity-based movement of one aggregate inventory line. Lifecycle REQUESTED to COMPLETED."""
+    __tablename__ = "equipment_transfers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int | None] = mapped_column(ForeignKey("equipment_requests.id", ondelete="CASCADE"), index=True)
+    request_line_id: Mapped[int | None] = mapped_column(ForeignKey("equipment_request_lines.id", ondelete="SET NULL"), index=True)
+    allocation_id: Mapped[int | None] = mapped_column(ForeignKey("equipment_allocations.id", ondelete="SET NULL"), index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("equipment_transfers.id"))
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), server_default="delivery")  # delivery | return | manual
+    from_location: Mapped[str] = mapped_column(String(120))
+    to_location: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(24), server_default="REQUESTED")
+    quantity_planned: Mapped[int] = mapped_column(Integer)
+    quantity_approved: Mapped[int | None] = mapped_column(Integer)
+    quantity_dispatched: Mapped[int | None] = mapped_column(Integer)
+    quantity_received: Mapped[int | None] = mapped_column(Integer)
+    quantity_accepted: Mapped[int | None] = mapped_column(Integer)
+    quantity_damaged: Mapped[int | None] = mapped_column(Integer)
+    quantity_missing: Mapped[int | None] = mapped_column(Integer, server_default="0")
+    quantity_good_returned: Mapped[int | None] = mapped_column(Integer)
+    quantity_needs_check_returned: Mapped[int | None] = mapped_column(Integer)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, server_default="0")
+    verified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    stages: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")  # status -> {at, by, quantity, note}
+    discrepancy_note: Mapped[str | None] = mapped_column(Text)
+    discrepancy_status: Mapped[str | None] = mapped_column(String(24))  # open | resolved_found | resolved_lost
+    discrepancy_resolved_by: Mapped[str | None] = mapped_column(String(120))
+    discrepancy_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    discrepancy_resolution_note: Mapped[str | None] = mapped_column(Text)
+    condition_note: Mapped[str | None] = mapped_column(Text)
+    dispatch_idempotency_key: Mapped[str | None] = mapped_column(String(80), unique=True)
+    receive_idempotency_key: Mapped[str | None] = mapped_column(String(80), unique=True)
+    return_idempotency_key: Mapped[str | None] = mapped_column(String(80), unique=True)
+
+
+class MovementLedger(Base):
+    """Append-only equipment movement & condition ledger: DB trigger rejects UPDATE and DELETE."""
+    __tablename__ = "movement_ledger"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    festival_id: Mapped[int] = mapped_column(ForeignKey("festivals.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(40), index=True)
+    item: Mapped[str] = mapped_column(String(60), index=True)
+    resource_code: Mapped[str | None] = mapped_column(String(40))
+    qty: Mapped[int] = mapped_column(Integer)
+    from_location: Mapped[str | None] = mapped_column(String(120))
+    to_location: Mapped[str | None] = mapped_column(String(120))
+    from_condition: Mapped[str | None] = mapped_column(String(30))
+    to_condition: Mapped[str | None] = mapped_column(String(30))
+    event_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    request_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    transfer_id: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24))
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    actor_name: Mapped[str] = mapped_column(String(120))
+    reason: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class MerchItem(FestivalScoped, Base):
+    """One merchandise SKU + size row from inventory_merch.csv."""
+    __tablename__ = "merch_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(40))
+    item: Mapped[str] = mapped_column(String(80))
+    size: Mapped[str] = mapped_column(String(16))  # S | M | L | XL | XXL | NA
+    on_hand: Mapped[int] = mapped_column(Integer)
+    csv_reserved: Mapped[int] = mapped_column(Integer, server_default="0")
+    csv_reserved_note: Mapped[str | None] = mapped_column(String(240))
+    csv_reserved_annotated_by: Mapped[str | None] = mapped_column(String(120))
+    csv_reserved_annotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    plan_reserved: Mapped[int] = mapped_column(Integer, server_default="0")
+    version: Mapped[int] = mapped_column(Integer, server_default="1")
+    entitlement_rule: Mapped[str] = mapped_column(String(40), server_default="manual_only")  # every_participant | participants_staff_leaders | manual_only
+    entitlement_confirmed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    entitlement_confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    entitlement_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    max_per_person: Mapped[int] = mapped_column(Integer, server_default="1")
+    __table_args__ = (
+        UniqueConstraint("festival_id", "item", "size", name="uq_merch_item_size"),
+        UniqueConstraint("festival_id", "code", name="uq_merch_item_code"),
+        CheckConstraint("on_hand >= 0 AND csv_reserved >= 0 AND plan_reserved >= 0 AND on_hand >= csv_reserved + plan_reserved", name="merch_quantities_valid"),
+    )
+
+
+class MerchConfig(FestivalScoped, Base):
+    """Festival-wide settings for Merchandise assumptions, kit template, staff quota, and active distribution plan."""
+    __tablename__ = "merch_configs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assumptions_confirmed: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    kit_templates: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
+    kit_confirmed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    kit_confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    kit_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    staff_leader_quota: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    staff_quota_set_by: Mapped[str | None] = mapped_column(String(120))
+    staff_quota_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    substitution_rule: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default='{"max_steps": 1, "direction": "up_preferred"}')
+    active_policy: Mapped[str | None] = mapped_column(String(20))  # P1 | P2 | P3 | None
+    approved_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    plan_approved_by: Mapped[str | None] = mapped_column(String(120))
+    plan_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    plan_stale: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    plan_stale_reasons: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    tray_prep_status: Mapped[dict[str, str]] = mapped_column(JSONB, server_default="{}")
+    __table_args__ = (UniqueConstraint("festival_id"),)
+
+
+class MerchIssue(FestivalScoped, Base):
+    """One merchandise issue to a participant (or voided record)."""
+    __tablename__ = "merch_issues"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    participant_id: Mapped[int] = mapped_column(ForeignKey("participants.id", ondelete="CASCADE"), index=True)
+    merch_item_id: Mapped[int] = mapped_column(ForeignKey("merch_items.id"), index=True)
+    item: Mapped[str] = mapped_column(String(80), index=True)
+    requested_size: Mapped[str] = mapped_column(String(16))
+    issued_size: Mapped[str] = mapped_column(String(16))
+    is_substitution: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    consent_recorded: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    qty: Mapped[int] = mapped_column(Integer, server_default="1")
+    desk: Mapped[str | None] = mapped_column(String(60))
+    issued_by: Mapped[str] = mapped_column(String(120))
+    issued_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    verification_method: Mapped[str] = mapped_column(String(30))  # id_lookup | qr_scan | phone_lookup | name_select | paper_reconciled
+    status: Mapped[str] = mapped_column(String(20), server_default="issued")  # issued | voided
+    voided_by: Mapped[str | None] = mapped_column(String(120))
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+    event_code: Mapped[str | None] = mapped_column(String(20))
+    position: Mapped[str | None] = mapped_column(String(40))
+    badge_category: Mapped[str | None] = mapped_column(String(60))
+    override_reason: Mapped[str | None] = mapped_column(Text)
+    override_approved_by: Mapped[str | None] = mapped_column(String(120))
+    idempotency_key: Mapped[str | None] = mapped_column(String(80), unique=True)
+    __table_args__ = (
+        CheckConstraint("qty > 0", name="merch_issue_qty_valid"),
+        Index("uq_merch_issue_once_per_person", "participant_id", "item", unique=True,
+              postgresql_where=text("status = 'issued' AND item <> 'winner medal' AND override_reason IS NULL")),
+        Index("uq_merch_issue_medal", "participant_id", "item", "event_code", "position", unique=True,
+              postgresql_where=text("status = 'issued' AND item = 'winner medal' AND override_reason IS NULL")),
+    )
+
+
+class MerchOwed(FestivalScoped, Base):
+    """Owed item record when size is short, out of stock, or substitution consent was declined."""
+    __tablename__ = "merch_owed"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    participant_id: Mapped[int] = mapped_column(ForeignKey("participants.id", ondelete="CASCADE"), index=True)
+    item: Mapped[str] = mapped_column(String(80), index=True)
+    requested_size: Mapped[str] = mapped_column(String(16))
+    proposed_substitute_size: Mapped[str | None] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(24), server_default="owed")  # owed | substitute_offered | collected
+    reason: Mapped[str] = mapped_column(String(40), server_default="size_short")  # size_short | no_stock | consent_declined
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(120))
+    __table_args__ = (
+        Index("uq_merch_owed_active", "festival_id", "participant_id", "item", unique=True,
+              postgresql_where=text("status <> 'collected'")),
+    )
+
+
+class MerchIncoming(FestivalScoped, Base):
+    """Expected incoming merchandise stock delivery."""
+    __tablename__ = "merch_incoming"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    merch_item_id: Mapped[int] = mapped_column(ForeignKey("merch_items.id", ondelete="CASCADE"), index=True)
+    item: Mapped[str] = mapped_column(String(80))
+    size: Mapped[str] = mapped_column(String(16))
+    expected_qty: Mapped[int] = mapped_column(Integer)
+    expected_date: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), server_default="expected")  # expected | received | partially_received | cancelled
+    qty_received: Mapped[int] = mapped_column(Integer, server_default="0")
+    discrepancy_qty: Mapped[int] = mapped_column(Integer, server_default="0")
+    discrepancy_note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(String(120))
+    received_by: Mapped[str | None] = mapped_column(String(120))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("expected_qty > 0 AND qty_received >= 0", name="merch_incoming_qty_valid"),)
+
+
+class MerchLedger(Base):
+    """Append-only merchandise ledger: DB trigger rejects UPDATE and DELETE."""
+    __tablename__ = "merch_ledger"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    festival_id: Mapped[int] = mapped_column(ForeignKey("festivals.id", ondelete="CASCADE"), index=True)
+    merch_item_id: Mapped[int | None] = mapped_column(ForeignKey("merch_items.id", ondelete="SET NULL"), index=True)
+    action: Mapped[str] = mapped_column(String(40), index=True)
+    item: Mapped[str] = mapped_column(String(80), index=True)
+    size: Mapped[str] = mapped_column(String(16))
+    qty_delta: Mapped[int] = mapped_column(Integer)
+    participant_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    participant_name: Mapped[str | None] = mapped_column(String(120))
+    desk: Mapped[str | None] = mapped_column(String(60))
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    actor_name: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str | None] = mapped_column(Text)
+    is_exception: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class Announcement(FestivalScoped, Simulated, Base):
@@ -489,7 +792,7 @@ class Simulation(FestivalScoped, Base):
     state_hash: Mapped[str] = mapped_column(String(64))
     report: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     status: Mapped[str] = mapped_column(String(20), server_default="previewed")
-    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
 
 
 class SimulationImpact(FestivalScoped, Base):

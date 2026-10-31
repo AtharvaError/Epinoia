@@ -3,6 +3,7 @@ import { Activity, CalendarPlus } from "lucide-react";
 import { type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { EventEquipmentSection } from "../components/Equipment";
 import {
   type Column, DataTable, Dialog, ErrorNote, Facts, Field, Loading, PageHead, Pagination, Pill, QueryState, queryString, ReasonForm, Tabs,
   fromInput, toInput, useAction, useDebounced, useFest, usePaged,
@@ -110,6 +111,7 @@ function EventDrawer({ code, options, onClose }: { code: string; options?: Optio
               ["Rounds", e.rounds.join(", ")], ["Per round", `${e.duration_minutes} minutes`], ["Registered", e.registered], ["Volunteers", `${e.staffed} of ${e.volunteers_needed}`],
               ["Venue needs", e.venue_requirements], ["Equipment", e.equipment_needs], ["Judges", e.judges.length ? e.judges.join(", ") : "None assigned"], ["Depends on", e.dependencies.length ? e.dependencies.join(", ") : "None"],
             ]} />
+            {can("equipment.read") && <EventEquipmentSection eventCode={e.code} />}
             <h3>Assigned volunteers ({e.shifts.length})</h3>
             {e.shifts.length ? <ul className="stack">{e.shifts.map((s) => <li key={s.code}><span>{s.volunteer}</span><Pill value={s.attendance} /></li>)}</ul> : <p className="muted small">None yet.</p>}
             <h3>Allocated resources ({e.resources.length})</h3>
@@ -232,6 +234,7 @@ const columns: Column<EventRow>[] = [
   { label: "Event", sort: "name", cell: (e) => <strong>{e.name}</strong> },
   { label: "Starts", sort: "start", cell: (e) => (e.start_at ? formatTime(e.start_at) : "Not scheduled") },
   { label: "Venue", sort: "venue", cell: (e) => e.venue?.name ?? "Not assigned" },
+  { label: "Equipment (CSV)", cell: (e) => <span className="small">{e.equipment_needs ?? "None"}</span> },
   { label: "Registered", sort: "registered", cell: (e) => <span className={e.venue && e.registered > e.venue.capacity ? "over-text" : ""}>{e.registered}{e.venue ? ` / ${e.venue.capacity}` : ""}</span>, className: "num" },
   { label: "Volunteers", sort: "staffed", cell: (e) => <span className={e.staffed < e.volunteers_needed ? "warn-text" : ""}>{e.staffed} / {e.volunteers_needed}</span>, className: "num" },
   { label: "Status", sort: "status", cell: (e) => <Pill value={e.status} tone={STATUS_TONE[e.status]} /> },

@@ -1,30 +1,38 @@
 """Seed roles and the Aarohan festival.
 
-    python -m scripts.seed          load into an empty database
+    python -m scripts.seed          load into an empty database (idempotent if already seeded)
     python -m scripts.seed --reset  wipe all data first (refused in production)
 """
 import sys
 
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 
 from app.auth.permissions import ALL, ROLES
 from app.config import settings
 from app.database import Base, SessionLocal
 from app.models import Festival, Permission, Role
 from app.services.housing import apply_sample_plan
-from app.services.pack_import import load_pack
+from app.services.pack_import import ensure_pack_extensions, load_pack
 from app.services.simulated_data import load_simulated
 from app.services.external_stay_service import seed_or_refresh_hotels
 
 
 def seed_roles(db) -> None:
-    # A migration may have added some already, so only create what is missing.
-    permissions = {p.key: p for p in db.scalars(select(Permission))}
-    for key in sorted(ALL - permissions.keys()):
-        permissions[key] = Permission(key=key)
-        db.add(permissions[key])
+    existing_perms = {p.key: p for p in db.scalars(select(Permission))}
+    for key in sorted(ALL):
+        if key not in existing_perms:
+            p = Permission(key=key)
+            db.add(p)
+            existing_perms[key] = p
+    db.flush()
+
+    existing_roles = {r.key: r for r in db.scalars(select(Role))}
     for key, (name, granted) in ROLES.items():
-        db.add(Role(key=key, name=name, permissions=[permissions[p] for p in sorted(granted)]))
+        if key in existing_roles:
+            existing_roles[key].name = name
+            existing_roles[key].permissions = [existing_perms[p] for p in sorted(granted)]
+        else:
+            db.add(Role(key=key, name=name, permissions=[existing_perms[p] for p in sorted(granted)]))
     db.flush()
 
 
@@ -37,9 +45,13 @@ def seed(reset: bool = False) -> None:
                 raise SystemExit("--reset is disabled in production")
             tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
             db.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
-        elif db.scalar(select(func.count()).select_from(Festival)):
-            raise SystemExit("Database already has data. Use --reset to replace it.")
+        existing = db.scalar(select(Festival).where(Festival.slug == "aarohan-2026"))
         seed_roles(db)
+        if existing and not reset:
+            ensure_pack_extensions(db, existing.id)
+            db.commit()
+            print("Seed complete (idempotent)")
+            return
         festival = load_pack(db)
         load_simulated(db, festival.id)
         db.flush()

@@ -1,191 +1,1020 @@
-import "leaflet/dist/leaflet.css";
-
-import { useQuery } from "@tanstack/react-query";
-import L from "leaflet";
-import { Plus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Download,
+  PackagePlus,
+  Plus,
+  Search,
+  Truck,
+} from "lucide-react";
+import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import {
-  type Column, DataTable, Dialog, ErrorNote, Facts, Field, PageHead, Pagination, Pill, QueryState, Simulated, Tabs, fromInput, useAction, useFest, usePaged,
+  ConditionSegmentedBar,
+  EquipmentAttentionStrip,
+  EquipmentOptions,
+  EquipmentRequestDrawer,
+  EquipmentRequestRow,
+  EquipmentStockRow,
+  EquipmentSummary,
+  EquipmentSummaryRibbon,
+  ExternalReceiptModal,
+  InspectResourceModal,
+  LedgerRow,
+  NewEquipmentRequestDrawer,
+  RepairResourceModal,
+  ReportFailureModal,
+  StockItemDrawer,
+  TransferRow,
+  formatTime,
+  readinessBadge,
+} from "../components/Equipment";
+import {
+  type Column,
+  DataTable,
+  Dialog,
+  ErrorNote,
+  Facts,
+  Field,
+  PageHead,
+  Pagination,
+  Pill,
+  QueryState,
+  SectionHead,
+  Tabs,
+  useAction,
+  useDebounced,
+  useFest,
+  usePaged,
 } from "../components/ui";
 import { api } from "../lib/api";
-import { formatTime } from "../lib/format";
-
-interface RouteRow {
-  code: string; name: string; pickup: string; destination: string; departure_at: string; expected_arrival_at: string; status: string; delay_minutes: number; is_simulated: boolean;
-  vehicle: { code: string; vehicle_type: string; capacity: number } | null; passengers: number; points: [number, number][] | null;
-}
-interface RouteDetail extends RouteRow {
-  riders: { code: string; name: string; college: string }[];
-  affected_events: { code: string; name: string; start_at: string; passengers: number }[];
-}
-interface Vehicle { code: string; vehicle_type: string; capacity: number; status: string; is_simulated: boolean }
-
-const TONE: Record<string, "ok" | "warn" | "bad"> = { delayed: "warn", cancelled: "bad", arrived: "ok" };
-
-function RouteMap({ routes }: { routes: RouteRow[] }) {
-  const holder = useRef<HTMLDivElement>(null);
-  const mapped = routes.filter((r) => r.points);
-  const unique = [...new Map(mapped.map((r) => [r.name, r])).values()];
-  useEffect(() => {
-    if (!holder.current || !unique.length) return;
-    const map = L.map(holder.current, { scrollWheelZoom: false });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
-    const bounds = L.latLngBounds([]);
-    for (const r of unique) {
-      const color = r.status === "delayed" ? "#f7b955" : "#4d84ff";
-      L.polyline(r.points!, { color, weight: 3, dashArray: "6 6" }).addTo(map).bindPopup(r.name);
-      r.points!.forEach((p, i) => {
-        L.circleMarker(p, { radius: 6, color: "#fcf6ea", fillColor: color, fillOpacity: 1, weight: 2 }).addTo(map).bindPopup(i === 0 ? r.pickup : r.destination);
-        bounds.extend(p);
-      });
-    }
-    map.fitBounds(bounds, { padding: [30, 30] });
-    return () => {
-      map.remove();
-    };
-    // The map only needs rebuilding when the set of routes changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unique.map((r) => r.name + r.status).join()]);
-  if (!unique.length) return null;
-  return (
-    <section className="panel">
-      <header><h2>Route map</h2></header>
-      <p className="panel-note">Straight lines between approximate stops, not road routes. Nothing here is live vehicle tracking. Stops with no known location are left off.</p>
-      <div ref={holder} className="map" role="region" aria-label="Map of shuttle routes between stops and campus" />
-    </section>
-  );
-}
-
-function RouteDrawer({ code, onClose }: { code: string; onClose: () => void }) {
-  const { base, can } = useFest();
-  const [delay, setDelay] = useState({ minutes: "30", reason: "" });
-  const [passenger, setPassenger] = useState("");
-  const query = useQuery({ queryKey: ["route", code], queryFn: () => api<RouteDetail>(`${base}/transport/routes/${code}`) });
-  const report = useAction(() => api(`${base}/transport/routes/${code}/delay`, { method: "POST", body: JSON.stringify({ minutes: Number(delay.minutes), reason: delay.reason }) }), { success: "Delay recorded" });
-  const add = useAction(() => api(`${base}/transport/routes/${code}/passengers`, { method: "POST", body: JSON.stringify({ participant_code: passenger.trim().toUpperCase() }) }), { success: "Passenger added", onDone: () => setPassenger("") });
-  const remove = useAction((rider: string) => api(`${base}/transport/routes/${code}/passengers/${rider}`, { method: "DELETE" }), { success: "Passenger removed" });
-  const r = query.data;
-  return (
-    <Dialog title={r ? `${r.name} · ${r.code}` : code} onClose={onClose} side>
-      <QueryState query={query}>
-        {r && (
-          <>
-            <div className="row-actions"><Pill value={r.status} tone={TONE[r.status]} />{r.is_simulated && <Simulated />}</div>
-            <Facts items={[["From", r.pickup], ["To", r.destination], ["Departs", formatTime(r.departure_at)], ["Expected arrival", formatTime(r.expected_arrival_at)], ["Delay", `${r.delay_minutes} minutes`],
-              ["Vehicle", r.vehicle ? `${r.vehicle.code}, ${r.vehicle.vehicle_type}` : "Not assigned"], ["Passengers", r.vehicle ? `${r.passengers} of ${r.vehicle.capacity}` : r.passengers]]} />
-            <h3>Events at risk ({r.affected_events.length})</h3>
-            {r.affected_events.length ? <ul className="stack">{r.affected_events.map((e) => <li key={e.code}><div><strong>{e.name}</strong><br /><span className="muted small">Starts {formatTime(e.start_at)}</span></div><span>{e.passengers} passengers</span></li>)}</ul> : <p className="muted small">No registered events start before these passengers can arrive.</p>}
-            {can("transport.write") && (
-              <form className="form" onSubmit={(e) => { e.preventDefault(); report.mutate(); }}>
-                <h3>Report a delay</h3>
-                <div className="inline-form">
-                  <input aria-label="Delay in minutes" type="number" min={1} max={1440} required value={delay.minutes} onChange={(e) => setDelay({ ...delay, minutes: e.target.value })} />
-                  <input aria-label="Reason" placeholder="Reason" required minLength={3} value={delay.reason} onChange={(e) => setDelay({ ...delay, reason: e.target.value })} />
-                  <button className="button-secondary" disabled={report.isPending}>Report</button>
-                </div>
-                <ErrorNote error={report.error} />
-              </form>
-            )}
-            <h3>Passengers ({r.riders.length})</h3>
-            {can("transport.write") && (
-              <form className="inline-form" onSubmit={(e) => { e.preventDefault(); add.mutate(); }}>
-                <input aria-label="Participant ID" placeholder="Participant ID, such as P0123" required value={passenger} onChange={(e) => setPassenger(e.target.value)} />
-                <button className="button-secondary" disabled={add.isPending}>Add</button>
-              </form>
-            )}
-            <ErrorNote error={add.error || remove.error} />
-            <ul className="stack scroll">{r.riders.map((p) => <li key={p.code}><div>{p.name} <span className="mono">{p.code}</span><br /><span className="muted small">{p.college}</span></div>{can("transport.write") && <button className="button-ghost" disabled={remove.isPending} onClick={() => remove.mutate(p.code)}>Remove</button>}</li>)}</ul>
-          </>
-        )}
-      </QueryState>
-    </Dialog>
-  );
-}
-
-function RouteForm({ vehicles, onClose }: { vehicles: Vehicle[]; onClose: () => void }) {
-  const { base } = useFest();
-  const [form, setForm] = useState({ name: "", pickup: "", destination: "", vehicle_code: "", departure_at: "", expected_arrival_at: "" });
-  const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [key]: e.target.value });
-  const save = useAction(() => api(`${base}/transport/routes`, { method: "POST", body: JSON.stringify({ ...form, vehicle_code: form.vehicle_code || null, departure_at: fromInput(form.departure_at), expected_arrival_at: fromInput(form.expected_arrival_at) }) }), { success: "Route added", onDone: onClose });
-  return (
-    <Dialog title="Add route" onClose={onClose}>
-      <form className="form form-grid" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-        <Field label="Route name"><input required minLength={2} value={form.name} onChange={set("name")} /></Field>
-        <Field label="Vehicle"><select value={form.vehicle_code} onChange={set("vehicle_code")}><option value="">Not assigned</option>{vehicles.map((v) => <option key={v.code} value={v.code}>{v.code} ({v.capacity} seats)</option>)}</select></Field>
-        <Field label="Pickup"><input required minLength={2} value={form.pickup} onChange={set("pickup")} /></Field>
-        <Field label="Destination"><input required minLength={2} value={form.destination} onChange={set("destination")} /></Field>
-        <Field label="Departs (IST)"><input type="datetime-local" required value={form.departure_at} onChange={set("departure_at")} /></Field>
-        <Field label="Arrives (IST)"><input type="datetime-local" required value={form.expected_arrival_at} onChange={set("expected_arrival_at")} /></Field>
-        <div className="span-all"><ErrorNote error={save.error} /><button className="button-primary" disabled={save.isPending}>Save route</button></div>
-      </form>
-    </Dialog>
-  );
-}
-
-function VehicleForm({ onClose }: { onClose: () => void }) {
-  const { base } = useFest();
-  const [form, setForm] = useState({ code: "", vehicle_type: "Bus", capacity: "40" });
-  const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [key]: e.target.value });
-  const save = useAction(() => api(`${base}/transport/vehicles`, { method: "POST", body: JSON.stringify({ ...form, capacity: Number(form.capacity) }) }), { success: "Vehicle added", onDone: onClose });
-  return (
-    <Dialog title="Add vehicle" onClose={onClose}>
-      <form className="form" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-        <Field label="Vehicle ID"><input required minLength={2} value={form.code} onChange={set("code")} /></Field>
-        <Field label="Type"><input required minLength={2} value={form.vehicle_type} onChange={set("vehicle_type")} /></Field>
-        <Field label="Seats"><input type="number" min={1} required value={form.capacity} onChange={set("capacity")} /></Field>
-        <ErrorNote error={save.error} />
-        <button className="button-primary" disabled={save.isPending}>Save vehicle</button>
-      </form>
-    </Dialog>
-  );
-}
-
-const routeColumns: Column<RouteRow>[] = [
-  { label: "Trip", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
-  { label: "Route", sort: "name", cell: (r) => <strong>{r.name}</strong> },
-  { label: "Departs", sort: "departs", cell: (r) => formatTime(r.departure_at) },
-  { label: "Arrives", sort: "arrives", cell: (r) => formatTime(r.expected_arrival_at) },
-  { label: "Vehicle", cell: (r) => r.vehicle?.code ?? "Not assigned" },
-  { label: "Passengers", cell: (r) => (r.vehicle ? `${r.passengers} / ${r.vehicle.capacity}` : r.passengers), className: "num" },
-  { label: "Status", sort: "status", cell: (r) => <Pill value={r.status} tone={TONE[r.status]} /> },
-];
-
-const vehicleColumns: Column<Vehicle>[] = [
-  { label: "ID", value: (v) => v.code, cell: (v) => <span className="mono">{v.code}</span> },
-  { label: "Type", value: (v) => v.vehicle_type, cell: (v) => v.vehicle_type },
-  { label: "Seats", value: (v) => v.capacity, cell: (v) => v.capacity, className: "num" },
-  { label: "Status", value: (v) => v.status, cell: (v) => <Pill value={v.status} tone={v.status === "available" ? "ok" : "warn"} /> },
-];
 
 export function Transport() {
   const { base, can } = useFest();
-  const [tab, setTab] = useState<"routes" | "vehicles">("routes");
-  const [status, setStatus] = useState("");
-  const [sort, setSort] = useState("");
-  const [page, setPage] = useState(1);
-  const [opened, setOpened] = useState<string>();
-  const [adding, setAdding] = useState<"route" | "vehicle" | null>(null);
-  useEffect(() => setPage(1), [status, sort]);
-  const routes = usePaged<RouteRow>(`${base}/transport/routes`, { status, sort, page });
-  const vehicles = useQuery({ queryKey: ["vehicles", base], queryFn: () => api<Vehicle[]>(`${base}/transport/vehicles`) });
+  const [params, setParams] = useSearchParams();
+
+  // Tab state: requests | stock | transfers | ledger
+  const [tab, setTab] = useState<"requests" | "stock" | "transfers" | "ledger">(
+    (params.get("tab") as any) ?? "requests"
+  );
+
+  // Summary query
+  const summaryQuery = useQuery({
+    queryKey: ["equipment-summary", base],
+    queryFn: () => api<EquipmentSummary>(`${base}/equipment/summary`),
+  });
+
+  // Requests state
+  const [reqStatus, setReqStatus] = useState(params.get("status") ?? "");
+  const [reqSearch, setReqSearch] = useState("");
+  const [reqMineOnly, setReqMineOnly] = useState(false);
+  const [reqPage, setReqPage] = useState(1);
+  const [selectedReqCode, setSelectedReqCode] = useState<string | null>(params.get("open") ?? null);
+  const [newReqOpen, setNewReqOpen] = useState(params.get("new") === "1");
+  const qReq = useDebounced(reqSearch);
+
+  const requestsQuery = usePaged<EquipmentRequestRow>(
+    `${base}/equipment/requests`,
+    { q: qReq, status: reqStatus, mine: reqMineOnly, page: reqPage },
+    tab === "requests"
+  );
+
+  // Campus Stock state
+  const [stockSearch, setStockSearch] = useState(params.get("search") ?? "");
+  const [stockLocation, setStockLocation] = useState("");
+  const [stockCondition, setStockCondition] = useState("");
+  const [stockPage, setStockPage] = useState(1);
+  const [selectedStockItem, setSelectedStockItem] = useState<string | null>(null);
+  const [inspectModal, setInspectModal] = useState<{ code: string; item: string; loc: string; max: number } | null>(null);
+  const [repairModal, setRepairModal] = useState<{ code: string; item: string; loc: string; max: number } | null>(null);
+  const [failureModal, setFailureModal] = useState<{ code: string; item: string; loc: string } | null>(null);
+  const [externalReceiptOpen, setExternalReceiptOpen] = useState(false);
+  const qStock = useDebounced(stockSearch);
+
+  const stockQuery = usePaged<EquipmentStockRow>(
+    `${base}/equipment/stock`,
+    { q: qStock, location: stockLocation, condition: stockCondition, page: stockPage },
+    tab === "stock"
+  );
+
+  // Transfers state
+  const [transferStatus, setTransferStatus] = useState("");
+  const [newTransferOpen, setNewTransferOpen] = useState(false);
+  const [selectedTransfer, setSelectedTransfer] = useState<TransferRow | null>(null);
+  const [discrepancyTransfer, setDiscrepancyTransfer] = useState<TransferRow | null>(null);
+
+  const transfersQuery = useQuery({
+    queryKey: ["equipment-transfers", base, transferStatus],
+    queryFn: () =>
+      api<{ open_transfers: TransferRow[] }>(`${base}/equipment/requests`).then((r) => r.open_transfers),
+    enabled: tab === "transfers",
+  });
+
+  // Movement History (Ledger) state
+  const [ledgerAction, setLedgerAction] = useState("");
+  const [ledgerSearch, setLedgerSearch] = useState("");
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const qLedger = useDebounced(ledgerSearch);
+
+  const ledgerQuery = usePaged<LedgerRow>(
+    `${base}/equipment/ledger`,
+    { q: qLedger, action: ledgerAction, page: ledgerPage },
+    tab === "ledger"
+  );
+
+  // Handle attention strip chip click
+  const handleAttentionClick = (targetTab: "requests" | "stock" | "transfers", filter?: string) => {
+    setTab(targetTab);
+    setParams({ tab: targetTab }, { replace: true });
+    if (targetTab === "requests") {
+      setReqStatus(filter === "shortage" ? "submitted" : filter ?? "");
+    } else if (targetTab === "stock") {
+      setStockCondition(filter ?? "");
+    } else if (targetTab === "transfers") {
+      setTransferStatus(filter ?? "");
+    }
+  };
+
+  // Tab change handler
+  const handleTabChange = (targetTab: "requests" | "stock" | "transfers" | "ledger") => {
+    setTab(targetTab);
+    setParams({ tab: targetTab }, { replace: true });
+  };
+
+  // Request Columns
+  const requestColumns: Column<EquipmentRequestRow>[] = [
+    { label: "Request ID", sort: "code", cell: (r) => <span className="mono">{r.code}</span> },
+    {
+      label: "Event",
+      cell: (r) => (
+        <div>
+          <strong>{r.event ? `${r.event.code} — ${r.event.name}` : "—"}</strong>
+          {r.source === "event_csv" && <div><small className="tone-ok">from events.csv</small></div>}
+        </div>
+      ),
+    },
+    {
+      label: "Equipment Item",
+      cell: (r) => (
+        <div>
+          <strong>{r.quantity} × {r.item}</strong>
+          {r.source_text && <div><small className="muted">{r.source_text}</small></div>}
+        </div>
+      ),
+    },
+    { label: "Destination", cell: (r) => r.destination },
+    { label: "Needed by", cell: (r) => formatTime(r.needed_by) },
+    {
+      label: "Priority",
+      cell: (r) => <Pill value={r.priority} tone={r.priority === "critical" || r.priority === "high" ? "warn" : "info"} />,
+    },
+    {
+      label: "Availability Breakdown",
+      cell: (r) => {
+        const a = r.availability;
+        return (
+          <small>
+            Free: <strong style={{ color: "#34d399" }}>{a.good_available}</strong> · Comm: {a.committed_elsewhere} · Rep: {a.under_repair} · Chk: {a.needs_check}
+            {a.shortage > 0 && <span style={{ color: "#f87171", fontWeight: 700 }}> · Short: {a.shortage}</span>}
+          </small>
+        );
+      },
+    },
+    {
+      label: "Readiness",
+      cell: (r) => {
+        const b = readinessBadge(r.readiness);
+        return <Pill value={b.label} tone={b.tone} />;
+      },
+    },
+    {
+      label: "Status",
+      cell: (r) => <Pill value={r.status} tone={r.status === "approved" ? "ok" : r.status === "rejected" ? "bad" : "warn"} />,
+    },
+  ];
+
+  // Stock Columns
+  const stockColumns: Column<EquipmentStockRow>[] = [
+    {
+      label: "Equipment Item",
+      cell: (s) => <strong>{s.item}</strong>,
+    },
+    {
+      label: "Condition Breakdown",
+      cell: (s) => (
+        <ConditionSegmentedBar
+          good={s.good_available ?? (s as any).good ?? 0}
+          needsCheck={s.needs_check ?? 0}
+          underRepair={s.under_repair ?? 0}
+          total={s.total_quantity ?? (s as any).total ?? 0}
+        />
+      ),
+    },
+    { label: "Total Units", cell: (s) => s.total_quantity ?? (s as any).total ?? 0, className: "num" },
+    { label: "Good Free", cell: (s) => <strong style={{ color: "#34d399" }}>{s.good_available ?? (s as any).good ?? 0}</strong>, className: "num" },
+    { label: "Committed", cell: (s) => s.committed ?? 0, className: "num" },
+    { label: "Needs Check", cell: (s) => <span style={{ color: (s.needs_check ?? 0) > 0 ? "#fbbf24" : "inherit" }}>{s.needs_check ?? 0}</span>, className: "num" },
+    { label: "Under Repair", cell: (s) => <span style={{ color: (s.under_repair ?? 0) > 0 ? "#f87171" : "inherit" }}>{s.under_repair ?? 0}</span>, className: "num" },
+    {
+      label: "Location Distribution",
+      cell: (s) => (
+        <small className="muted">
+          {(s.locations ?? []).map((l) => `${l.location}: ${l.quantity}`).join(" · ")}
+        </small>
+      ),
+    },
+    {
+      label: "Actions",
+      cell: (s) => (
+        <button
+          type="button"
+          className="button-ghost small"
+          onClick={(e) => {
+            e.stopPropagation();
+            setSelectedStockItem(s.item);
+          }}
+        >
+          Details
+        </button>
+      ),
+    },
+  ];
+
+  // Transfer Columns
+  const transferColumns: Column<TransferRow>[] = [
+    { label: "ID", cell: (t) => `#${t.id}` },
+    { label: "Item", cell: (t) => <strong>{t.quantity_planned} × {t.item}</strong> },
+    { label: "From", cell: (t) => t.from_location },
+    { label: "To", cell: (t) => t.to_location },
+    {
+      label: "Stage",
+      cell: (t) => (
+        <Pill
+          value={t.status}
+          tone={t.status === "COMPLETED" || t.status === "RECEIVED" ? "ok" : t.status === "IN_TRANSIT" ? "info" : "warn"}
+        />
+      ),
+    },
+    {
+      label: "Discrepancy",
+      cell: (t) =>
+        t.discrepancy_note ? (
+          <span className="tone-bad small" style={{ fontWeight: 600 }}>{t.discrepancy_note}</span>
+        ) : (
+          <span className="muted small">None</span>
+        ),
+    },
+    {
+      label: "Action",
+      cell: (t) => (
+        <button
+          type="button"
+          className="button-secondary small"
+          onClick={(e) => {
+            e.stopPropagation();
+            setSelectedTransfer(t);
+          }}
+        >
+          Manage Stage
+        </button>
+      ),
+    },
+  ];
+
+  // Movement Ledger Columns
+  const ledgerColumns: Column<LedgerRow>[] = [
+    { label: "Timestamp", cell: (l) => formatTime(l.timestamp) },
+    { label: "Action", cell: (l) => <span className="mono">{l.action}</span> },
+    { label: "Item", cell: (l) => <strong>{l.quantity} × {l.item}</strong> },
+    { label: "From Location", cell: (l) => l.from_location ?? "—" },
+    { label: "To Location", cell: (l) => l.to_location ?? "—" },
+    { label: "Operator", cell: (l) => l.user_name ?? "System" },
+    { label: "Notes", cell: (l) => <span className="small muted">{l.notes ?? "—"}</span> },
+  ];
+
   return (
     <div>
-      <PageHead title="Transportation" simulated subtitle="All vehicles and trips here are simulated: the pack has no transport data">
-        {can("transport.write") && <><button className="button-ghost" onClick={() => setAdding("vehicle")}><Plus size={16} /> Add vehicle</button><button className="button-primary small" onClick={() => setAdding("route")}><Plus size={16} /> Add route</button></>}
+      {/* Header max 72px */}
+      <PageHead
+        title="Inventory Control"
+        subtitle="Logistics catalogue, 5-location stock balances, request allocation, and transfer lifecycle"
+      >
+        {can("equipment.request") && (
+          <button type="button" className="button-primary small" onClick={() => setNewReqOpen(true)}>
+            <Plus size={16} /> New equipment request
+          </button>
+        )}
+        {can("equipment.approve") && (
+          <button type="button" className="button-secondary small" onClick={() => setNewTransferOpen(true)}>
+            <Truck size={16} /> New transfer
+          </button>
+        )}
       </PageHead>
-      {routes.data && <RouteMap routes={routes.data.items} />}
-      <Tabs value={tab} onChange={setTab} options={[["routes", "Trips"], ["vehicles", "Vehicles"]]} />
-      {tab === "routes" && (
-        <>
-          <div className="filters"><select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All statuses</option>{["scheduled", "in_transit", "delayed", "arrived", "cancelled"].map((s) => <option key={s} value={s}>{s.replace("_", " ")}</option>)}</select></div>
-          <QueryState query={routes}>{routes.data && <><DataTable rows={routes.data.items} columns={routeColumns} rowKey={(r) => r.code} empty="No trips match." onRow={(r) => setOpened(r.code)} sort={sort} onSort={setSort} /><Pagination page={routes.data.page} pages={routes.data.pages} total={routes.data.total} onPage={setPage} /></>}</QueryState>
-        </>
+
+      {/* 5 Equal Metric Cards */}
+      <EquipmentSummaryRibbon summary={summaryQuery.data} />
+
+      {/* Attention Strip */}
+      <EquipmentAttentionStrip
+        attention={summaryQuery.data?.attention}
+        onFilterChange={handleAttentionClick}
+      />
+
+      {/* 4 Tabs with Badges */}
+      <Tabs
+        value={tab}
+        onChange={handleTabChange}
+        options={[
+          ["requests", `Equipment requests (${summaryQuery.data?.counts?.open_requests ?? 0})`],
+          ["stock", `Campus stock (${summaryQuery.data?.counts?.stock_items ?? 18})`],
+          ["transfers", `Transfers (${summaryQuery.data?.counts?.open_transfers ?? 0})`],
+          ["ledger", "Movement history"],
+        ]}
+      />
+
+      {/* TAB 1: Equipment Requests */}
+      {tab === "requests" && (
+        <section className="panel stack">
+          <div className="toolbar">
+            <div className="tabs" role="group" aria-label="Request status filter">
+              {([
+                ["", "All requests"],
+                ["submitted", "Awaiting approval"],
+                ["approved", "Approved"],
+                ["partially_approved", "Partial"],
+                ["returning", "Returning"],
+                ["closed", "Closed"],
+                ["rejected", "Rejected"],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={reqStatus === key ? "active" : ""}
+                  onClick={() => setReqStatus(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="search">
+              <Search size={16} className="muted" />
+              <input
+                type="search"
+                placeholder="Search request or event..."
+                value={reqSearch}
+                onChange={(e) => setReqSearch(e.target.value)}
+              />
+            </div>
+
+            <label className="check-inline">
+              <input
+                type="checkbox"
+                checked={reqMineOnly}
+                onChange={(e) => setReqMineOnly(e.target.checked)}
+              />
+              <span>My requests only</span>
+            </label>
+          </div>
+
+          <QueryState query={requestsQuery}>
+            {requestsQuery.data && (
+              <>
+                <DataTable
+                  rows={requestsQuery.data.items}
+                  columns={requestColumns}
+                  rowKey={(r) => r.code}
+                  onRow={(r) => setSelectedReqCode(r.code)}
+                  empty="No equipment requests match these filters."
+                />
+                <Pagination
+                  page={requestsQuery.data.page}
+                  pages={requestsQuery.data.pages}
+                  total={requestsQuery.data.total}
+                  onPage={setReqPage}
+                />
+              </>
+            )}
+          </QueryState>
+        </section>
       )}
-      {tab === "vehicles" && <QueryState query={vehicles}>{vehicles.data && <DataTable rows={vehicles.data} columns={vehicleColumns} rowKey={(v) => v.code} empty="No vehicles yet." />}</QueryState>}
-      {opened && <RouteDrawer code={opened} onClose={() => setOpened(undefined)} />}
-      {adding === "route" && <RouteForm vehicles={vehicles.data ?? []} onClose={() => setAdding(null)} />}
-      {adding === "vehicle" && <VehicleForm onClose={() => setAdding(null)} />}
+
+      {/* TAB 2: Campus Equipment Stock */}
+      {tab === "stock" && (
+        <section className="panel stack">
+          <div className="toolbar">
+            <div className="search">
+              <Search size={16} className="muted" />
+              <input
+                type="search"
+                placeholder="Search item name..."
+                value={stockSearch}
+                onChange={(e) => setStockSearch(e.target.value)}
+              />
+            </div>
+
+            <select
+              aria-label="Filter by Location"
+              value={stockLocation}
+              onChange={(e) => setStockLocation(e.target.value)}
+            >
+              <option value="">All 5 campus locations</option>
+              {["Registration Desk", "Store Room A", "Main Stage", "Sports Complex", "Van 1"].map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc} {loc === "Van 1" ? "(Unverified mobile)" : ""}
+                </option>
+              ))}
+            </select>
+
+            <select
+              aria-label="Filter by Condition"
+              value={stockCondition}
+              onChange={(e) => setStockCondition(e.target.value)}
+            >
+              <option value="">Any condition</option>
+              <option value="good">Good (Deployable)</option>
+              <option value="needs check">Needs check (Inspect)</option>
+              <option value="under repair">Under repair</option>
+            </select>
+
+            {can("equipment.approve") && (
+              <button
+                type="button"
+                className="button-primary small"
+                onClick={() => setExternalReceiptOpen(true)}
+              >
+                <PackagePlus size={16} /> External Receipt / Rental
+              </button>
+            )}
+          </div>
+
+          <QueryState query={stockQuery}>
+            {stockQuery.data && (
+              <>
+                <DataTable
+                  rows={stockQuery.data.items}
+                  columns={stockColumns}
+                  rowKey={(s) => s.item}
+                  onRow={(s) => setSelectedStockItem(s.item)}
+                  empty="No stock items match these filters."
+                />
+                <Pagination
+                  page={stockQuery.data.page}
+                  pages={stockQuery.data.pages}
+                  total={stockQuery.data.total}
+                  onPage={setStockPage}
+                />
+              </>
+            )}
+          </QueryState>
+        </section>
+      )}
+
+      {/* TAB 3: Transfers */}
+      {tab === "transfers" && (
+        <section className="panel stack">
+          <SectionHead title="Campus Transfer Lifecycle">
+            <span className="muted small">REQUESTED → APPROVED → DISPATCHED → IN_TRANSIT → RECEIVED → COMPLETED</span>
+          </SectionHead>
+
+          <QueryState query={transfersQuery}>
+            {transfersQuery.data && (
+              <DataTable
+                rows={transfersQuery.data}
+                columns={transferColumns}
+                rowKey={(t) => t.id}
+                onRow={(t) => setSelectedTransfer(t)}
+                empty="No active or pending transfers right now."
+              />
+            )}
+          </QueryState>
+        </section>
+      )}
+
+      {/* TAB 4: Movement History (Ledger) */}
+      {tab === "ledger" && (
+        <section className="panel stack">
+          <div className="toolbar">
+            <div className="search">
+              <Search size={16} className="muted" />
+              <input
+                type="search"
+                placeholder="Search ledger by item or code..."
+                value={ledgerSearch}
+                onChange={(e) => setLedgerSearch(e.target.value)}
+              />
+            </div>
+
+            <select
+              aria-label="Action filter"
+              value={ledgerAction}
+              onChange={(e) => setLedgerAction(e.target.value)}
+            >
+              <option value="">All actions</option>
+              <option value="create_request">Request Created</option>
+              <option value="approve_request">Request Approved</option>
+              <option value="reject_request">Request Rejected</option>
+              <option value="transfer_dispatch">Transfer Dispatched</option>
+              <option value="transfer_receive">Transfer Received</option>
+              <option value="return_receive">Return Completed</option>
+              <option value="inspect">Inspected</option>
+              <option value="repair">Repaired</option>
+              <option value="report_failure">Failure Reported</option>
+              <option value="external_receipt">External Receipt</option>
+            </select>
+
+            <a
+              href={`${base}/equipment/ledger/export.csv`}
+              download="festos-equipment-ledger.csv"
+              className="button-ghost small"
+            >
+              <Download size={14} /> Export CSV
+            </a>
+          </div>
+
+          <QueryState query={ledgerQuery}>
+            {ledgerQuery.data && (
+              <>
+                <DataTable
+                  rows={ledgerQuery.data.items}
+                  columns={ledgerColumns}
+                  rowKey={(l) => l.id}
+                  empty="No movements match."
+                />
+                <Pagination
+                  page={ledgerQuery.data.page}
+                  pages={ledgerQuery.data.pages}
+                  total={ledgerQuery.data.total}
+                  onPage={setLedgerPage}
+                />
+              </>
+            )}
+          </QueryState>
+        </section>
+      )}
+
+      {/* DRAWERS & MODALS */}
+
+      {/* Request Detail Drawer */}
+      {selectedReqCode && (
+        <EquipmentRequestDrawer
+          code={selectedReqCode}
+          onClose={() => setSelectedReqCode(null)}
+        />
+      )}
+
+      {/* 3-Step New Request Wizard */}
+      {newReqOpen && (
+        <NewEquipmentRequestDrawer onClose={() => setNewReqOpen(false)} />
+      )}
+
+      {/* Stock Item Detail Drawer */}
+      {selectedStockItem && (
+        <StockItemDrawer
+          item={selectedStockItem}
+          onClose={() => setSelectedStockItem(null)}
+          onInspect={(code, loc, max) => {
+            setSelectedStockItem(null);
+            setInspectModal({ code, item: selectedStockItem, loc, max });
+          }}
+          onRepair={(code, loc, max) => {
+            setSelectedStockItem(null);
+            setRepairModal({ code, item: selectedStockItem, loc, max });
+          }}
+        />
+      )}
+
+      {/* Inspect Modal */}
+      {inspectModal && (
+        <InspectResourceModal
+          resourceCode={inspectModal.code}
+          item={inspectModal.item}
+          location={inspectModal.loc}
+          maxQuantity={inspectModal.max}
+          onClose={() => setInspectModal(null)}
+        />
+      )}
+
+      {/* Repair Modal */}
+      {repairModal && (
+        <RepairResourceModal
+          resourceCode={repairModal.code}
+          item={repairModal.item}
+          location={repairModal.loc}
+          maxQuantity={repairModal.max}
+          onClose={() => setRepairModal(null)}
+        />
+      )}
+
+      {/* Report Failure Modal */}
+      {failureModal && (
+        <ReportFailureModal
+          resourceCode={failureModal.code}
+          item={failureModal.item}
+          location={failureModal.loc}
+          onClose={() => setFailureModal(null)}
+        />
+      )}
+
+      {/* External Receipt Modal */}
+      {externalReceiptOpen && (
+        <ExternalReceiptModal onClose={() => setExternalReceiptOpen(false)} />
+      )}
+
+      {/* Transfer Lifecycle Advance Modal */}
+      {selectedTransfer && (
+        <TransferDetailModal
+          transfer={selectedTransfer}
+          onClose={() => setSelectedTransfer(null)}
+          onResolveDiscrepancy={() => {
+            setDiscrepancyTransfer(selectedTransfer);
+            setSelectedTransfer(null);
+          }}
+        />
+      )}
+
+      {/* Resolve Discrepancy Modal */}
+      {discrepancyTransfer && (
+        <ResolveDiscrepancyModal
+          transfer={discrepancyTransfer}
+          onClose={() => setDiscrepancyTransfer(null)}
+        />
+      )}
+
+      {/* New Ad-hoc Transfer Modal */}
+      {newTransferOpen && (
+        <NewAdHocTransferModal onClose={() => setNewTransferOpen(false)} />
+      )}
     </div>
+  );
+}
+
+// ============================================================================
+// Transfer Stage Detail Modal (Dispatched / Mobile-Friendly Receive)
+// ============================================================================
+
+function TransferDetailModal({
+  transfer,
+  onClose,
+  onResolveDiscrepancy,
+}: {
+  transfer: TransferRow;
+  onClose: () => void;
+  onResolveDiscrepancy: () => void;
+}) {
+  const { base, can } = useFest();
+  const qc = useQueryClient();
+
+  const [dispatchedQty, setDispatchedQty] = useState(
+    String(transfer.quantity_dispatched ?? transfer.quantity_planned)
+  );
+  const [receivedQty, setReceivedQty] = useState(
+    String(transfer.quantity_received ?? transfer.quantity_dispatched ?? transfer.quantity_planned)
+  );
+  const [damagedQty, setDamagedQty] = useState(String(transfer.quantity_damaged ?? 0));
+  const [conditionNote, setConditionNote] = useState(transfer.condition_note ?? "");
+  const [discrepancyNote, setDiscrepancyNote] = useState(transfer.discrepancy_note ?? "");
+
+  // Next stage determination
+  const nextStage =
+    transfer.status === "REQUESTED"
+      ? "APPROVED"
+      : transfer.status === "APPROVED"
+      ? "DISPATCHED"
+      : transfer.status === "DISPATCHED"
+      ? "IN_TRANSIT"
+      : transfer.status === "IN_TRANSIT"
+      ? "RECEIVED"
+      : transfer.status === "RECEIVED"
+      ? "COMPLETED"
+      : "COMPLETED";
+
+  const advanceAction = useAction(
+    () =>
+      api(`${base}/equipment/transfers/${transfer.id}/advance`, {
+        method: "POST",
+        body: JSON.stringify({
+          next_stage: nextStage,
+          quantity_dispatched: Number(dispatchedQty) || null,
+          quantity_received: Number(receivedQty) || null,
+          quantity_damaged: Number(damagedQty) || 0,
+          condition_note: conditionNote.trim() || null,
+          discrepancy_note: discrepancyNote.trim() || null,
+        }),
+      }),
+    {
+      success: `Transfer advanced to ${nextStage}`,
+      onDone: () => {
+        qc.invalidateQueries({ queryKey: ["equipment-transfers"] });
+        qc.invalidateQueries({ queryKey: ["equipment-requests"] });
+        qc.invalidateQueries({ queryKey: ["equipment-summary"] });
+        qc.invalidateQueries({ queryKey: ["equipment-stock"] });
+        onClose();
+      },
+    }
+  );
+
+  return (
+    <Dialog title={`Transfer #${transfer.id} · ${transfer.item}`} onClose={onClose}>
+      <div className="stack">
+        <div className="row-actions">
+          <Pill value={transfer.status} tone={transfer.status === "COMPLETED" ? "ok" : "warn"} />
+          <Pill value={transfer.kind} tone="info" />
+        </div>
+
+        <Facts
+          items={[
+            ["Item", transfer.item ?? "—"],
+            ["From", transfer.from_location],
+            ["To", transfer.to_location],
+            ["Planned Qty", transfer.quantity_planned],
+            ["Dispatched Qty", transfer.quantity_dispatched ?? "Not dispatched"],
+            ["Received Qty", transfer.quantity_received ?? "Not received"],
+            ["Damaged Qty", transfer.quantity_damaged ?? 0],
+          ]}
+        />
+
+        {transfer.discrepancy_note && (
+          <div className="callout warn small">
+            <strong>Discrepancy Flagged:</strong> {transfer.discrepancy_note}
+            {can("equipment.approve") && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" className="button-secondary small" onClick={onResolveDiscrepancy}>
+                  Resolve Discrepancy
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* If transfer is in progress, allow advancing */}
+        {transfer.status !== "COMPLETED" && (
+          <form
+            className="panel stack"
+            onSubmit={(e) => {
+              e.preventDefault();
+              advanceAction.mutate();
+            }}
+          >
+            <h4>Advance Transfer Stage</h4>
+            <p className="muted small">
+              Current stage: <strong>{transfer.status}</strong> → Next: <strong>{nextStage}</strong>
+            </p>
+
+            {nextStage === "DISPATCHED" && (
+              <Field label="Dispatched Quantity">
+                <input
+                  type="number"
+                  min={1}
+                  required
+                  value={dispatchedQty}
+                  onChange={(e) => setDispatchedQty(e.target.value)}
+                />
+              </Field>
+            )}
+
+            {(nextStage === "RECEIVED" || transfer.status === "IN_TRANSIT") && (
+              <div className="form-grid">
+                <Field label="Verified Received Quantity">
+                  <input
+                    type="number"
+                    min={0}
+                    required
+                    value={receivedQty}
+                    onChange={(e) => setReceivedQty(e.target.value)}
+                  />
+                </Field>
+
+                <Field label="Damaged in Transit">
+                  <input
+                    type="number"
+                    min={0}
+                    value={damagedQty}
+                    onChange={(e) => setDamagedQty(e.target.value)}
+                  />
+                </Field>
+
+                <div className="span-all">
+                  <Field label="Condition Note">
+                    <input
+                      placeholder="e.g. Scratched casing, verified cables"
+                      value={conditionNote}
+                      onChange={(e) => setConditionNote(e.target.value)}
+                    />
+                  </Field>
+                </div>
+
+                <div className="span-all">
+                  <Field label="Discrepancy Note (if count differs from dispatch)">
+                    <input
+                      placeholder="e.g. 1 tripod missing from delivery box"
+                      value={discrepancyNote}
+                      onChange={(e) => setDiscrepancyNote(e.target.value)}
+                    />
+                  </Field>
+                </div>
+              </div>
+            )}
+
+            <ErrorNote error={advanceAction.error} />
+
+            <div className="row-actions">
+              <button type="submit" className="button-primary" disabled={advanceAction.isPending}>
+                Advance to {nextStage}
+              </button>
+              <button type="button" className="button-ghost" onClick={onClose}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
+// ============================================================================
+// Resolve Discrepancy Modal
+// ============================================================================
+
+function ResolveDiscrepancyModal({
+  transfer,
+  onClose,
+}: {
+  transfer: TransferRow;
+  onClose: () => void;
+}) {
+  const { base } = useFest();
+  const qc = useQueryClient();
+  const [resolution, setResolution] = useState<"found_late" | "reclassified_damaged" | "written_off">("found_late");
+  const [notes, setNotes] = useState("");
+
+  const resolveAction = useAction(
+    () =>
+      api(`${base}/equipment/transfers/${transfer.id}/resolve-discrepancy`, {
+        method: "POST",
+        body: JSON.stringify({ resolution, notes: notes.trim() }),
+      }),
+    {
+      success: `Discrepancy resolved as ${resolution}`,
+      onDone: () => {
+        qc.invalidateQueries({ queryKey: ["equipment-transfers"] });
+        qc.invalidateQueries({ queryKey: ["equipment-summary"] });
+        onClose();
+      },
+    }
+  );
+
+  return (
+    <Dialog title={`Resolve Discrepancy · Transfer #${transfer.id}`} onClose={onClose}>
+      <form
+        className="form stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          resolveAction.mutate();
+        }}
+      >
+        <Facts
+          items={[
+            ["Item", transfer.item ?? "—"],
+            ["Discrepancy Flag", transfer.discrepancy_note ?? "Missing / Damaged units"],
+          ]}
+        />
+
+        <Field label="Resolution Outcome">
+          <select value={resolution} onChange={(e) => setResolution(e.target.value as any)}>
+            <option value="found_late">Found Late (Returned to destination stock)</option>
+            <option value="reclassified_damaged">Reclassified Damaged (Moved to Under Repair)</option>
+            <option value="written_off">Written Off (Decommissioned)</option>
+          </select>
+        </Field>
+
+        <Field label="Investigation & Resolution Notes">
+          <textarea
+            required
+            rows={3}
+            placeholder="Document where items were found, courier report, or write-off approval"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </Field>
+
+        <ErrorNote error={resolveAction.error} />
+
+        <div className="row-actions">
+          <button type="submit" className="button-primary" disabled={resolveAction.isPending || !notes.trim()}>
+            Confirm Resolution
+          </button>
+          <button type="button" className="button-ghost" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+// ============================================================================
+// New Ad-Hoc Transfer Modal
+// ============================================================================
+
+function NewAdHocTransferModal({ onClose }: { onClose: () => void }) {
+  const { base } = useFest();
+  const qc = useQueryClient();
+  const [item, setItem] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [fromLoc, setFromLoc] = useState("Store Room A");
+  const [toLoc, setToLoc] = useState("Main Stage");
+
+  const optionsQuery = useQuery({
+    queryKey: ["equipment-options", base],
+    queryFn: () => api<EquipmentOptions>(`${base}/equipment/options`),
+  });
+
+  const createTransfer = useAction(
+    () =>
+      api(`${base}/equipment/transfers`, {
+        method: "POST",
+        body: JSON.stringify({
+          item,
+          quantity: Number(quantity),
+          from_location: fromLoc,
+          to_location: toLoc,
+        }),
+      }),
+    {
+      success: `Created transfer for ${quantity} × ${item} from ${fromLoc} to ${toLoc}`,
+      onDone: () => {
+        qc.invalidateQueries({ queryKey: ["equipment-transfers"] });
+        qc.invalidateQueries({ queryKey: ["equipment-summary"] });
+        onClose();
+      },
+    }
+  );
+
+  return (
+    <Dialog title="Create Campus Transfer" onClose={onClose}>
+      <form
+        className="form stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          createTransfer.mutate();
+        }}
+      >
+        <div className="form-grid">
+          <Field label="Equipment Item">
+            <select required value={item} onChange={(e) => setItem(e.target.value)}>
+              <option value="">Select item...</option>
+              {optionsQuery.data?.items.map((it) => (
+                <option key={it} value={it}>
+                  {it}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Quantity">
+            <input
+              type="number"
+              min={1}
+              required
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Source Location">
+            <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)}>
+              {["Store Room A", "Registration Desk", "Main Stage", "Sports Complex", "Van 1"].map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc} {loc === "Van 1" ? "(Unverified mobile)" : ""}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Destination Location">
+            <select value={toLoc} onChange={(e) => setToLoc(e.target.value)}>
+              {["Main Stage", "Sports Complex", "Registration Desk", "Store Room A", "Van 1"].map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <ErrorNote error={createTransfer.error} />
+
+        <div className="row-actions">
+          <button type="submit" className="button-primary" disabled={createTransfer.isPending || !item}>
+            Initiate Transfer
+          </button>
+          <button type="button" className="button-ghost" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
