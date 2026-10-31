@@ -112,8 +112,8 @@ export function CommandCenter() {
     enabled: allowed,
   });
 
-  // Volunteers land on the phone check-in screen, and anyone else without the dashboard on the schedule.
-  if (!allowed || (dashboard.error instanceof ApiError && dashboard.error.status === 403)) return <Navigate to={can("participants.checkin") ? "/check-in" : "/events"} replace />;
+  // Volunteers are the one role without the dashboard, so they land on the phone check-in screen.
+  if (!allowed || (dashboard.error instanceof ApiError && dashboard.error.status === 403)) return <Navigate to="/check-in" replace />;
   if (dashboard.isPending) return <div className="skeleton-grid" role="status" aria-label="Loading dashboard">{Array.from({ length: 10 }, (_, i) => <div key={i} />)}</div>;
   if (dashboard.isError) {
     return (

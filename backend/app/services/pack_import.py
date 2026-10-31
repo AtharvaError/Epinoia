@@ -34,7 +34,6 @@ SIMULATED_USERS = [
     ("finance@festos.test", "Demo Finance Head", "finance_head", "Finance"),
     ("safety@festos.test", "Demo Safety Coordinator", "safety_coordinator", "Safety"),
     ("volunteers@festos.test", "Demo Volunteer Head", "volunteer_head", "Volunteers"),
-    ("participant@festos.test", "Demo Participant", "participant", None),
 ]
 
 
