@@ -11,6 +11,7 @@ from app.api.common import by_code, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import Event, Festival, Participant, Registration, Route, TransportAssignment, User, Vehicle
+from app.notifications import alert_team
 from app.services.audit import record
 
 router = APIRouter(prefix="/api/festivals/{festival_id}/transport", tags=["transport"])
@@ -165,8 +166,10 @@ def report_delay(code: str, body: DelayIn, festival: Festival = Depends(festival
     r.delay_minutes += body.minutes
     r.status = "delayed"
     record(db, user, festival.id, "route.delay", "route", code, f"{r.name} delayed by {body.minutes} minutes", reason=body.reason)
+    at_risk = affected_events(db, festival.id, r, r.expected_arrival_at)
+    alert_team(db, festival.id, f"{r.name} ({code}) is {r.delay_minutes} minutes late. Events at risk: {', '.join(e['name'] for e in at_risk) or 'none'}.")
     db.commit()
-    return {"expected_arrival_at": r.expected_arrival_at, "affected_events": affected_events(db, festival.id, r, r.expected_arrival_at)}
+    return {"expected_arrival_at": r.expected_arrival_at, "affected_events": at_risk}
 
 
 @router.post("/routes/{code}/passengers", status_code=201, dependencies=[Depends(require("transport.write"))])

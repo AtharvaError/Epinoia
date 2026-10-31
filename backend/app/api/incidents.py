@@ -10,7 +10,7 @@ from app.api.common import by_code, ordered, paged
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import AuditLog, Festival, Incident, User
-from app.notifications import notify_roles
+from app.notifications import alert_team, notify_roles
 from app.services.audit import record
 
 router = APIRouter(prefix="/api/festivals/{festival_id}/incidents", tags=["incidents"])
@@ -73,6 +73,7 @@ def report_incident(body: IncidentIn, festival: Festival = Depends(festival_acce
     record(db, user, festival.id, "incident.report", "incident", incident.code, f"{user.name} reported a {incident.priority} {incident.category} incident at {incident.location}")
     if body.priority in ("high", "critical"):
         notify_roles(db, festival.id, RESPONDERS, f"{body.priority.title()} incident: {body.category}", f"{body.location}: {body.description[:160]}", f"/safety?open={incident.code}", exclude_user=user.id)
+        alert_team(db, festival.id, f"{body.priority.title()} incident {incident.code}: {incident.category} at {incident.location}. It needs a team assigned.")
     db.commit()
     return row(incident)
 
@@ -115,5 +116,6 @@ def escalate(code: str, body: EscalateIn, festival: Festival = Depends(festival_
     incident.priority = PRIORITIES[index + 1]
     record(db, user, festival.id, "incident.escalate", "incident", code, f"{user.name} escalated {code} to {incident.priority}", reason=body.reason)
     notify_roles(db, festival.id, RESPONDERS, f"Escalated to {incident.priority}: {incident.category}", f"{incident.location}: {body.reason}", f"/safety?open={code}", exclude_user=user.id)
+    alert_team(db, festival.id, f"{code} escalated to {incident.priority}: {incident.category} at {incident.location}.")
     db.commit()
     return row(incident)

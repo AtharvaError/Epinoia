@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import ChangeApproval, Festival, Simulation, SimulationImpact, User
-from app.notifications import notify_roles, roles_for_modules
+from app.notifications import alert_team, notify_roles, roles_for_modules
 from app.services.audit import record
 from app.simulation.graph import graph_payload, traverse
 from app.simulation.scenarios import SCENARIOS, Outcome
@@ -102,6 +102,7 @@ def submit(db: Session, festival: Festival, user: User, simulation_id: int, note
     title = simulation.report["title"]
     record(db, user, festival.id, "simulation.submit", "simulation", simulation.id, f"{user.name} requested approval: {title}", reason=note)
     notify_roles(db, festival.id, APPROVER_ROLES, "Approval requested", f"{user.name} requested approval: {title}", f"/ripple?simulation={simulation.id}", exclude_user=user.id)
+    alert_team(db, festival.id, f"Approval needed in Ripple: {title}. {simulation.report['headline']}")
     db.commit()
 
 
@@ -135,6 +136,7 @@ def approve(festival_id: int, user: User, simulation_id: int, reason: str | None
                    before={"state": report["before_after"]}, after={"summary": report["summary"]}, reason=reason)
             modules = [n["id"] for n in report["graph"]["nodes"] if n["depth"] is not None]
             sent = notify_roles(tx, festival_id, roles_for_modules(modules), report["title"], report["headline"], f"/ripple?simulation={simulation.id}", exclude_user=user.id)
+            alert_team(tx, festival_id, f"Change applied: {report['title']}. {report['headline']}")
             tx.commit()
             return {"status": "applied", "result": result, "notified": sent}
     except OperationalError as error:

@@ -68,6 +68,27 @@ Without a key, the assistant runs in offline mode and answers set questions from
 festival data. To enable free-form questions, set `ANTHROPIC_API_KEY` in `.env` and
 restart the backend. The key stays on the server.
 
+## Telegram bot
+
+Optional two-way bot that answers from live data over the same read-only assistant.
+It long-polls Telegram (no public URL needed), so it starts with the backend.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. In `.env` set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_AS_EMAIL` (the FestOS account whose
+   permissions the bot answers with, e.g. `safety@festos.test`).
+3. Restart the backend and message the bot. It refuses you and replies with your chat id.
+4. Add that id to `TELEGRAM_ALLOWED_CHAT_IDS` (comma-separated, a group's id starts with
+   `-`) and restart. Empty means nobody can use the bot.
+5. Use `/help`, `/status`, `/incidents`, `/beds`, `/food`, `/transport`, or any question.
+   Replies carry that user's permissions and cannot change anything; it never logs the
+   question, only that one was asked.
+
+Listed chats also get team alerts: high and critical incidents, escalations, trip delays,
+vendor outages, Ripple approvals needed and changes applied. Alerts carry counts, places
+and codes only, never participant names or incident descriptions.
+
+Only one running server may use a token. A second one gets `409 Conflict` from Telegram.
+
 ## Logins
 
 All accounts share the password in `DEMO_PASSWORD` in your `.env`.

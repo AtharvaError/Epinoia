@@ -82,6 +82,33 @@ def ask_claude(client: Any, ctx: Context, question: str, history: list[dict[str,
 
 # --- Offline mode ---------------------------------------------------------------------------
 
+MOVE = re.compile(r"move (?:the )?(.+?) to (?:the )?(.+?)[?.!]*$")
+EVENT = re.compile(r"(?:when|where) (?:is|does) (?:the )?(.+?)(?: start| happen\w*)?[?.!]*$")
+CONTINGENT = re.compile(r"(?:for|from|of) (?:the )?(.+?)(?: contingent| college| have| has| arrived| checked|[?.!]*$)")
+DIETS = ("non-vegetarian", "vegetarian", "nut-free", "gluten-free", "jain", "vegan")
+READ_ONLY = "I can only read data, so I can't do that or predict it here. Use the Ripple Simulator in the portal, where an approver reviews every change."
+PRIVATE = "Personal details such as contacts and medical information stay in the portal, so I don't share them here."
+REFUSALS = (
+    (re.compile(r"\b(?:phone|mobile|email|aadhaar|address|medical|contact)(?:s|es)?\b"), PRIVATE),
+    (re.compile(r"^(?:please |pls |can you |could you )?(?:close|cancel|delete|remove|approve|reject|assign|allocate|reallocate|reschedule|shut|add|update(?! on\b)|change|mark|merge|send|book|resolve|escalate)\b"
+                r"|\bwhat (?:happens )?if\b"), READ_ONLY),
+)
+ROUTES = (
+    (("accommodation", "bed", "room", "hostel"), "accommodation_status"), (("conflict", "clash", "double-book", "over capacity"), "event_conflicts"),
+    (("transport", "bus", "shuttle", "delay", "late"), "transport_risks"), (("budget", "expense", "spend", "money"), "budget_status"),
+    (("task", "pending"), "pending_tasks"), (("incident", "safety", "emergency", "emergencies"), "open_incidents"),
+    (("food", "vendor", "meal", "diet", "dietary", "catering", "certificate", "hygiene", *DIETS), "food_status"),
+    (("venue", "maintenance", "equipment", "resource", "stock", "inventory"), "venue_status"),
+    (("contingent", "college", "arrive", "arrived", "arrival", "checked in", "check-in"), "arrival_status"),
+    (("alert", "attention", "status", "overview", "summary"), "festival_overview"),
+)
+
+
+def has_word(text: str, words: tuple[str, ...]) -> bool:
+    """Whole words, so "business" is not a bus and "classroom" is not a room."""
+    return bool(re.search(rf"\b(?:{'|'.join(words)})(?:s|es|ed|ing)?\b", text))
+
+
 def words_for(result: Any, name: str) -> str:
     if isinstance(result, dict) and "error" in result:
         return result["error"]
@@ -102,35 +129,63 @@ def words_for(result: Any, name: str) -> str:
         return "Pending tasks: " + ", ".join(f"{r['department']} {r['pending']}" for r in result) + ". These are simulated." if result else "No tasks are pending."
     if name == "open_incidents":
         return f"{len(result)} open incidents: " + ", ".join(f"{i['code']} {i['category']} ({i['priority']})" for i in result) + "." if result else "No incidents are open."
+    if name == "food_status":
+        if len(result["diets"]) == 1:
+            diet = result["diets"][0]
+            return f"{diet['diet']} ({diet['people']:,} people): " + "; ".join(f"{d['day']}: {', '.join(d['vendors']) or 'no vendor'}" for d in diet["days"]) + "."
+        o = result["overview"]
+        gaps = [f"{d['diet']} on {', '.join(x['day'] for x in d['days'] if x['state'] != 'covered')}" for d in result["diets"] if d["people"] and any(x["state"] != "covered" for x in d["days"])]
+        first = f" Do first: {result['fix_first'][0]['action']}." if result["fix_first"] else ""
+        return f"{o['total_vendors']} vendors: {o['confirmed_active_count']} confirmed, {o['unconfirmed_count']} not yet confirmed, {o['interrupted_count']} unavailable. {o['certificates_expired']} certificates expired. Diet gaps: {'; '.join(gaps) or 'none'}.{first}"
+    if name == "venue_status":
+        venues = ", ".join(f"{v['name']} ({v['status']})" for v in result["venues_not_operational"]) or "all operational"
+        items = result["equipment_needing_attention"]
+        stock = ", ".join(f"{r['name']} ({'fully reserved' if r['condition'] == 'good' else r['condition']})" for r in items[:8]) or "none"
+        return f"Venues: {venues}. Equipment items needing attention: {len(items)}. {'First 8' if len(items) > 8 else 'They are'}: {stock}."
+    if name == "arrival_status":
+        if result["searched_for"]:
+            return " ".join(f"{m['college']}: {m['registered']} registered, {m['checked_in_to_rooms']} checked in to rooms." for m in result["matches"]) or f"I could not find a contingent matching {result['searched_for']}."
+        return f"{result['contingents']} contingents, {result['participants']:,} participants, {result['checked_in_to_rooms']:,} checked in to rooms. Individual people are in the portal."
     if name == "predict_venue_move":
         return f"Prediction: {result['prediction']} {result['to_apply']}"
     if name == "find_event":
-        return " ".join(f"{e['name']} ({e['code']}) has {e['registered']} registered at {e['venue'] or 'no venue'}." for e in result) or "I could not find that event."
+        return " ".join(f"{e['name']} ({e['code']}) starts {e['starts'].astimezone(IST):%d %b at %H:%M} at {e['venue'] or 'no venue'}, with {e['registered']} registered." for e in result) or "I could not find that event."
     if name == "festival_overview":
-        return "; ".join(a["title"] for a in result["alerts"][:5]) + "."
+        return "; ".join(a["title"] for a in result["alerts"][:5]) + "." if result["alerts"] else "No alerts right now."
     return json.dumps(result, default=str)
+
+
+def arguments_for(name: str, q: str) -> dict[str, Any]:
+    if name == "transport_risks":
+        return {"route_code": None}
+    if name == "food_status":
+        return {"diet": next((d for d in DIETS if has_word(q, (d,))), None)}
+    if name == "arrival_status":
+        college = CONTINGENT.search(q)
+        return {"query": college[1].strip() if college else None}
+    return {}
 
 
 def route_question(question: str) -> tuple[str, dict[str, Any]] | None:
     q = question.lower()
-    move = re.search(r"move (?:the )?(.+?) to (?:the )?(.+?)[?.!]*$", q)
+    move = MOVE.search(q)
     if move:
         return "predict_venue_move", {"event": move[1].strip(), "venue": move[2].strip()}
     if "volunteer" in q and any(w in q for w in ("available", "free", "tomorrow", "today")):
         day = today() + timedelta(days=1 if "tomorrow" in q else 0)
         return "available_volunteers", {"day": f"{day:%Y-%m-%d}"}
-    routes = (
-        (("accommodation", "bed", "room", "hostel"), "accommodation_status"), (("conflict", "clash", "double-book", "over capacity"), "event_conflicts"),
-        (("transport", "bus", "shuttle", "delay"), "transport_risks"), (("budget", "expense", "spend", "money"), "budget_status"),
-        (("task", "pending"), "pending_tasks"), (("incident", "safety", "emergency"), "open_incidents"), (("alert", "attention", "status", "overview", "summary"), "festival_overview"),
-    )
-    for keywords, name in routes:
-        if any(k in q for k in keywords):
-            return name, {"route_code": None} if name == "transport_risks" else {}
-    return None
+    for keywords, name in ROUTES:
+        if has_word(q, keywords):
+            return name, arguments_for(name, q)
+    event = EVENT.search(q)
+    return ("find_event", {"query": event[1].strip()}) if event else None
 
 
 def ask_offline(ctx: Context, question: str, note: str = "") -> dict[str, Any]:
+    q = question.lower()
+    refusal = None if MOVE.search(q) else next((reply for pattern, reply in REFUSALS if pattern.search(q)), None)
+    if refusal:
+        return {"answer": refusal, "mode": "offline", "tools": [], "note": note}
     route = route_question(question)
     if not route:
         topics = ", ".join(t.label.lower() for t in tools_for(ctx.permissions))

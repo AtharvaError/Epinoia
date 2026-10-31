@@ -2,6 +2,7 @@
 the normal permission-checked routes, so a socket can never leak a record.
 """
 import asyncio
+from collections.abc import Callable
 
 from fastapi import WebSocket
 from sqlalchemy import event
@@ -15,6 +16,7 @@ class Hub:
     def __init__(self) -> None:
         self.sockets: dict[int, set[WebSocket]] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.alert: Callable[[int, str], None] = lambda _festival_id, _text: None  # The Telegram bot takes this over while it runs.
 
     def add(self, festival_id: int, socket: WebSocket) -> None:
         self.sockets.setdefault(festival_id, set()).add(socket)
@@ -49,8 +51,11 @@ def remember_changes(session: Session, _context: object) -> None:
 def announce_changes(session: Session) -> None:
     for festival_id in session.info.pop("changed_festivals", ()):
         hub.changed(festival_id)
+    for festival_id, text in session.info.pop("team_alerts", ()):
+        hub.alert(festival_id, text)
 
 
 @event.listens_for(Session, "after_rollback")
 def forget_changes(session: Session) -> None:
     session.info.pop("changed_festivals", None)
+    session.info.pop("team_alerts", None)

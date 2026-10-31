@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     demo_password: str = ""
     environment: str = "development"
     anthropic_api_key: str = ""  # Empty runs the assistant in offline mode.
+    telegram_bot_token: str = ""  # Empty disables the Telegram bot.
+    telegram_as_email: str = ""  # The FestOS user whose permissions and festival the bot answers with.
+    telegram_allowed_chat_ids: str = ""  # Comma-separated chat ids the bot answers and alerts. Empty = nobody.
 
     @model_validator(mode="after")
     def production_is_safe(self):
