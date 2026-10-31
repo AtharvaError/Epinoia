@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  CheckCircle2, ChevronDown, ChevronUp, Download, Eye,
+  CheckCircle2, ChevronDown, ChevronUp, Compass, Download, Eye,
   Plus, Printer, RefreshCw, Sparkles, Users, Wrench,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -12,6 +12,7 @@ import {
 } from "../components/ui";
 import { api } from "../lib/api";
 import { formatMoney, formatNumber, formatTime } from "../lib/format";
+import { StaySuggestionsDrawer } from "../components/StaySuggestionsDrawer";
 
 interface HostelSummary {
   code: string;
@@ -1923,6 +1924,7 @@ export function Accommodation() {
   const [minorsModalCode, setMinorsModalCode] = useState<string | null>(null);
   const [contingentModalCode, setContingentModalCode] = useState<string | null>(null);
   const [reviewingPreview, setReviewingPreview] = useState(false);
+  const [showStaySuggestions, setShowStaySuggestions] = useState(false);
 
   const q = useDebounced(search);
   useEffect(() => setPage(1), [tab, q, hostel, freeOnly, room, allocStatus, arrivalWindow, causeFilter, contingentFilter, under18Only, sort]);
@@ -2212,6 +2214,11 @@ export function Accommodation() {
         <button className="button-ghost" onClick={() => setContingentModalCode("C01")}>
           <Users size={15} /> Contingent sheet
         </button>
+        {(can("can_send_stay_suggestions") || can("accommodation.read") || can("accommodation.write")) && (
+          <button className="button-ghost" onClick={() => setShowStaySuggestions(true)}>
+            <Compass size={15} /> Stay suggestions
+          </button>
+        )}
         {write && (
           <>
             <button className="button-ghost" onClick={() => setAdding("room")}><Plus size={15} /> Add room</button>
@@ -2875,6 +2882,7 @@ export function Accommodation() {
       {target && <ManualAllocate code={target} onClose={() => setTarget(undefined)} />}
       {adding === "hostel" && <AddHostel onClose={() => setAdding(null)} />}
       {adding === "room" && data && <AddRoom hostels={data.hostels} onClose={() => setAdding(null)} />}
+      {showStaySuggestions && <StaySuggestionsDrawer onClose={() => setShowStaySuggestions(false)} />}
     </div>
   );
 }

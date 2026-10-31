@@ -14,6 +14,7 @@ from app.models import Festival, Permission, Role
 from app.services.housing import apply_sample_plan
 from app.services.pack_import import load_pack
 from app.services.simulated_data import load_simulated
+from app.services.external_stay_service import seed_or_refresh_hotels
 
 
 def seed_roles(db) -> None:
@@ -43,6 +44,7 @@ def seed(reset: bool = False) -> None:
         load_simulated(db, festival.id)
         db.flush()
         apply_sample_plan(db, festival)
+        seed_or_refresh_hotels(db, festival.id, radius_km=15.0, use_remote=False)
         db.commit()
     print("Seed complete")
 

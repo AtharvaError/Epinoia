@@ -69,6 +69,9 @@ class Festival(Timestamped, Base):
     status: Mapped[str] = mapped_column(String(20), server_default="planning")
     minor_housing_policy: Mapped[str | None] = mapped_column(String(40))
     minor_policy_set_by: Mapped[str | None] = mapped_column(String(120))
+    campus_latitude: Mapped[float] = mapped_column(Float, server_default="22.5838")
+    campus_longitude: Mapped[float] = mapped_column(Float, server_default="75.7656")
+    campus_name: Mapped[str] = mapped_column(String(120), server_default="IIM Indore")
     __table_args__ = (CheckConstraint("end_date >= start_date", name="dates_ordered"),)
 
 
@@ -134,6 +137,8 @@ class Participant(FestivalScoped, SoftDeleted, Base):
     housing_outreach_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     minor_supervision_status: Mapped[str | None] = mapped_column(String(30))
     minor_supervision_note: Mapped[str | None] = mapped_column(String(240))
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
     __table_args__ = (UniqueConstraint("festival_id", "code"),)
 
 
@@ -535,3 +540,40 @@ class AuditLog(Base):
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class ExternalHotel(FestivalScoped, Base):
+    __tablename__ = "external_hotels"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    address: Mapped[str | None] = mapped_column(String(300))
+    area: Mapped[str | None] = mapped_column(String(120), index=True)
+    latitude: Mapped[float] = mapped_column(Float)
+    longitude: Mapped[float] = mapped_column(Float)
+    phone: Mapped[str | None] = mapped_column(String(40))
+    alternate_phone: Mapped[str | None] = mapped_column(String(40))
+    price_min: Mapped[int | None] = mapped_column(Integer)
+    price_max: Mapped[int | None] = mapped_column(Integer)
+    rating: Mapped[float | None] = mapped_column(Float)
+    notes: Mapped[str | None] = mapped_column(Text)
+    google_maps_link: Mapped[str | None] = mapped_column(String(500))
+    is_verified: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    verified_by: Mapped[str | None] = mapped_column(String(120))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+
+
+class StaySuggestionLog(FestivalScoped, Base):
+    __tablename__ = "stay_suggestion_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sent_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    sent_by_name: Mapped[str] = mapped_column(String(120))
+    participant_id: Mapped[int] = mapped_column(ForeignKey("participants.id", ondelete="CASCADE"), index=True)
+    participant_name: Mapped[str] = mapped_column(String(120))
+    participant_code: Mapped[str] = mapped_column(String(20))
+    hotel_ids: Mapped[list[int]] = mapped_column(JSONB, server_default="[]")
+    hotel_names: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    message_text: Mapped[str] = mapped_column(Text)
+    delivery_channel: Mapped[str] = mapped_column(String(30))  # telegram | clipboard
+    delivery_status: Mapped[str] = mapped_column(String(30))   # delivered | failed | copied
+    error_message: Mapped[str | None] = mapped_column(Text)

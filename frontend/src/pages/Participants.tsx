@@ -17,6 +17,8 @@ interface Row {
   arrival_at: string | null; departure_at: string | null; tshirt_size: string | null; has_pass: boolean; restricted: boolean;
 }
 interface Detail extends Row {
+  stay_suggestions_sent?: boolean;
+  stay_suggestions_count?: number;
   events: { code: string; name: string; start_at: string | null; venue: string | null; team_code: string | null; clashes: string[]; off_campus: boolean }[];
   contingent: { code: string; college: string; leader: string | null } | null;
   accommodation: { room: string; hostel: string; status: string } | null;
@@ -111,6 +113,7 @@ function ParticipantDetail({ code, options, onClose }: { code: string; options?:
             <div className="row-actions">
               <Pill value={p.registration_status} tone={p.registration_status === "cancelled" ? "bad" : "ok"} />
               <Pill value={p.checkin_status} tone={p.checkin_status === "checked_in" ? "ok" : undefined} />
+              {p.stay_suggestions_sent && <Pill value="Stay suggestions sent" tone="ok" />}
               {can("participants.write") && <><button className="button-ghost" onClick={() => setView("edit")}>Edit</button><button className="button-ghost danger" onClick={() => setView("delete")}>Remove</button></>}
             </div>
             <Facts items={[

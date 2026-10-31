@@ -11,6 +11,7 @@ ALL = READ_ALL | {
     "transport.write", "volunteers.write", "venues.write", "finance.write", "finance.approve",
     "communication.write", "incidents.write", "simulation.run", "simulation.approve", "audit.read",
     "settings.manage", "festivals.manage", "vendors.write", "vendors.approve",
+    "can_send_stay_suggestions",
 }
 
 _HEAD = {"dashboard.read", "events.read", "venues.read", "vendors.read", "communication.read", "communication.write", "incidents.read", "incidents.report", "simulation.run"}
@@ -23,7 +24,7 @@ ROLES: dict[str, tuple[str, set[str]]] = {
         "volunteers.read", "analytics.read"}),
     "accommodation_head": ("Accommodation Head", _HEAD | {
         "participants.read", "participants.read_sensitive", "accommodation.read", "accommodation.write",
-        "transport.read", "vendors.write", "analytics.read"}),
+        "transport.read", "vendors.write", "analytics.read", "can_send_stay_suggestions"}),
     "transport_head": ("Transport Head", _HEAD | {
         "participants.read", "transport.read", "transport.write", "accommodation.read", "vendors.write", "analytics.read"}),
     "volunteer_head": ("Volunteer Head", _HEAD | {"volunteers.read", "volunteers.write", "analytics.read"}),
