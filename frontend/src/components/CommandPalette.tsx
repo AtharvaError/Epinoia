@@ -8,7 +8,7 @@ import { api, type SearchResult } from "../lib/api";
 
 export interface Command { label: string; hint: string; to?: string; run?: () => void }
 
-/** Ctrl+K: jump to a page, start a simulation, or find a participant or event. */
+/** Ctrl+K: jump to a page, start a simulation, or find a participant, event, equipment or request. */
 export function CommandPalette({ festivalId, commands, onClose }: { festivalId: number; commands: Command[]; onClose: () => void }) {
   const navigate = useNavigate();
   const [term, setTerm] = useState("");
@@ -20,9 +20,21 @@ export function CommandPalette({ festivalId, commands, onClose }: { festivalId: 
     enabled: query.length >= 2,
   });
   const needle = term.trim().toLowerCase();
-  const found: Command[] = (query.length >= 2 ? results.data ?? [] : []).map((r) => ({
-    label: r.title, hint: `${r.type} ${r.code}, ${r.subtitle}`, to: `/${r.type === "Event" ? "events" : "participants"}?open=${r.code}`,
-  }));
+  const found: Command[] = (query.length >= 2 ? results.data ?? [] : []).map((r) => {
+    let to = `/${r.type === "Event" ? "events" : "participants"}?open=${r.code}`;
+    if (r.type === "Equipment") {
+      to = `/transportation?tab=stock&search=${encodeURIComponent(r.title)}`;
+    } else if (r.type === "Equipment Request") {
+      to = `/transportation?tab=equipment&open=${encodeURIComponent(r.code)}`;
+    } else if (r.type === "Merchandise") {
+      to = `/merchandise?search=${encodeURIComponent(r.title)}`;
+    }
+    return {
+      label: r.title,
+      hint: `${r.type} ${r.code}, ${r.subtitle}`,
+      to,
+    };
+  });
   const options = [...commands.filter((c) => c.label.toLowerCase().includes(needle)), ...found].slice(0, 12);
   const selected = Math.min(index, Math.max(options.length - 1, 0));
 

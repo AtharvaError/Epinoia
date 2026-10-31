@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.analytics.dashboard import dashboard, festival_phase
 from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
-from app.models import Department, Event, Festival, Notification, Participant, User
+from app.models import Department, EquipmentRequest, Event, Festival, Notification, Participant, Resource, User
 from app.services.audit import record
 from app.services.pack_import import DEPARTMENTS
 
@@ -88,6 +88,16 @@ def search(q: str = Query(min_length=2, max_length=80), festival: Festival = Dep
             Event.festival_id == festival.id, Event.deleted_at.is_(None),
             or_(Event.code.ilike(like, escape="\\"), Event.name.ilike(like, escape="\\"))).order_by(Event.code).limit(6))
         results += [{"type": "Event", "code": e.code, "title": e.name, "subtitle": e.status.title()} for e in events]
+    if "equipment.read" in permissions:
+        eq_items = sorted(set(db.scalars(select(Resource.name).where(
+            Resource.festival_id == festival.id, Resource.kind == "logistics",
+            or_(Resource.name.ilike(like, escape="\\"), Resource.code.ilike(like, escape="\\"))))))[:4]
+        results += [{"type": "Equipment", "code": item_name, "title": item_name, "subtitle": "Inventory Control"} for item_name in eq_items]
+        eq_reqs = db.scalars(select(EquipmentRequest).where(
+            EquipmentRequest.festival_id == festival.id,
+            or_(EquipmentRequest.code.ilike(like, escape="\\"), EquipmentRequest.item.ilike(like, escape="\\"),
+                EquipmentRequest.destination.ilike(like, escape="\\"))).order_by(EquipmentRequest.id.desc()).limit(4))
+        results += [{"type": "EquipmentRequest", "code": r.code, "title": f"{r.code} · {r.item}", "subtitle": f"{r.destination} ({r.status})"} for r in eq_reqs]
     return results
 
 

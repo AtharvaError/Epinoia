@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, BarChart3, Bell, BedDouble, Bus, CalendarDays, ChevronsLeft, ChevronsRight, HandHelping, LayoutDashboard,
-  LogOut, Megaphone, Menu, MessageCircleQuestion, Moon, QrCode, Search, Settings, ShieldAlert, Store, Sun, UserRound, Users, Wallet, Warehouse, X, type LucideIcon,
+  Activity, BarChart3, Bell, BedDouble, Boxes, CalendarDays, ChevronsLeft, ChevronsRight, HandHelping, LayoutDashboard,
+  LogOut, Megaphone, Menu, MessageCircleQuestion, Moon, QrCode, Search, Settings, ShieldAlert, Shirt, Store, Sun, UserRound, Users, Wallet, Warehouse, X, type LucideIcon,
 } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
@@ -32,7 +32,8 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { label: "Events & Schedule", icon: CalendarDays, permission: "events.read", to: "/events" },
     { label: "Participants", icon: Users, permission: "participants.read", to: "/participants" },
     { label: "Accommodation", icon: BedDouble, permission: "accommodation.read", to: "/accommodation" },
-    { label: "Transportation", icon: Bus, permission: "transport.read", to: "/transportation" },
+    { label: "Inventory Control", icon: Boxes, permission: "equipment.read", to: "/transportation" },
+    { label: "Merchandise", icon: Shirt, permission: "merch.read", to: "/merchandise" },
     { label: "Vendors", icon: Store, permission: "vendors.read", to: "/vendors" },
     { label: "Volunteers", icon: HandHelping, permission: "volunteers.read", to: "/volunteers" },
     { label: "Venues & Resources", icon: Warehouse, permission: "venues.read", to: "/venues" },

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Send } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { Dialog, ErrorNote, Field, PageHead, Pagination, Pill, QueryState, Simulated, Tabs, useAction, useFest, usePaged } from "../components/ui";
 import { api, type Notifications } from "../lib/api";
@@ -9,9 +10,14 @@ import { formatTime } from "../lib/format";
 interface Announcement { id: number; title: string; body: string; audience_type: string; audience_ref: string | null; created_at: string; created_by: string | null; recipients: number; read: number; acknowledged: number; is_simulated: boolean }
 interface Options { roles: { key: string; name: string }[]; departments: string[]; events: { code: string; name: string }[] }
 
-function Compose({ options, onClose }: { options: Options; onClose: () => void }) {
+function Compose({ options, initial, onClose }: { options: Options; initial?: { title?: string; body?: string; audience_type?: string; audience_ref?: string }; onClose: () => void }) {
   const { base } = useFest();
-  const [form, setForm] = useState({ title: "", body: "", audience_type: "festival", audience_ref: "" });
+  const [form, setForm] = useState({
+    title: initial?.title || "",
+    body: initial?.body || "",
+    audience_type: initial?.audience_type || "festival",
+    audience_ref: initial?.audience_ref || "",
+  });
   const set = (key: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [key]: e.target.value });
   const send = useAction(() => api<{ recipients: number }>(`${base}/announcements`, { method: "POST", body: JSON.stringify({ ...form, audience_ref: form.audience_ref || null }) }), {
     success: (r) => `Sent to ${r.recipients} people`, onDone: onClose,
@@ -58,11 +64,27 @@ function Inbox() {
 
 export function Communication() {
   const { base, can } = useFest();
-  const [tab, setTab] = useState<"sent" | "inbox">("inbox");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<"sent" | "inbox">(params.get("compose") === "1" ? "sent" : "inbox");
   const [page, setPage] = useState(1);
-  const [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useState(params.get("compose") === "1");
   const list = usePaged<Announcement>(`${base}/announcements`, { page }, tab === "sent");
   const options = useQuery({ queryKey: ["announcement-options", base], queryFn: () => api<Options>(`${base}/announcements/options`) });
+
+  useEffect(() => {
+    if (params.get("compose") === "1") {
+      setTab("sent");
+      setComposing(true);
+    }
+  }, [params]);
+
+  const initialDraft = {
+    title: params.get("title") || "",
+    body: params.get("body") || "",
+    audience_type: params.get("audience_type") || "festival",
+    audience_ref: params.get("audience_ref") || "",
+  };
+
   return (
     <div>
       <PageHead title="Communication" subtitle="Reaches core team accounts in this app. Nothing is sent by email or SMS.">
@@ -91,7 +113,7 @@ export function Communication() {
           )}
         </QueryState>
       )}
-      {composing && options.data && <Compose options={options.data} onClose={() => setComposing(false)} />}
+      {composing && options.data && <Compose options={options.data} initial={initialDraft} onClose={() => setComposing(false)} />}
     </div>
   );
 }

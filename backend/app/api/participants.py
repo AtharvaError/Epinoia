@@ -314,6 +314,9 @@ def update_participant(code: str, body: ParticipantIn, festival: Festival = Depe
     changed = [k for k, v in changes.items() if getattr(p, k) != v]
     for field in changed:
         setattr(p, field, changes[field])
+    if "tshirt_size" in changed or "registration_status" in changed:
+        from app.api.merchandise import mark_plan_stale_if_needed
+        mark_plan_stale_if_needed(db, festival.id, f"Participant {code} updated ({', '.join(changed)})")
     # Sensitive values stay out of the audit log: it records that they changed, not what they were.
     record(db, user, festival.id, "participant.update", "participant", code, f"{user.name} updated {p.full_name} ({code})", after={"changed": changed})
     db.commit()
@@ -327,6 +330,8 @@ def delete_participant(code: str, body: DeleteReason, festival: Festival = Depen
     p.deleted_at = func.now()
     for allocation in db.scalars(select(AccommodationAllocation).where(AccommodationAllocation.participant_id == p.id, AccommodationAllocation.status != "cancelled")):
         allocation.status = "cancelled"
+    from app.api.merchandise import mark_plan_stale_if_needed
+    mark_plan_stale_if_needed(db, festival.id, f"Participant {code} removed")
     record(db, user, festival.id, "participant.delete", "participant", code, f"{user.name} removed {p.full_name} ({code})", reason=body.reason)
     db.commit()
 

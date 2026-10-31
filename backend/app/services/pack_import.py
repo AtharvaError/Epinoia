@@ -5,12 +5,14 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.verifier import hash_password
 from app.config import ROOT, settings
 from app.models import (
-    AuditLog, Contingent, DataIssue, Department, Event, Festival, Hostel, Participant, Registration, Resource,
+    AuditLog, Contingent, DataIssue, Department, EquipmentAlias, Event, Festival, Hostel,
+    InventoryLocation, MerchConfig, MerchItem, Participant, Registration, Resource,
     Role, Room, Team, User, Vendor, Venue, Volunteer,
 )
 from app.services.schedule_plan import PlanEvent, PlanVenue, build_schedule, event_length
@@ -37,6 +39,34 @@ SIMULATED_USERS = [
     ("participant@festos.test", "Demo Participant", "participant", None),
 ]
 
+DEFAULT_ALIASES = [
+    ("barricades", "barricade"),
+    ("tables", "table"),
+    ("projector", "projector"),
+    ("extension cords", "extension cord"),
+    ("camera", "camera"),
+    ("tripod", "tripod"),
+    ("mics", "mic"),
+    ("speaker", "speaker"),
+]
+
+DEFAULT_KIT_TEMPLATES = {
+    "participant": [
+        {"item": "T-shirt", "qty": 1, "size": "declared"},
+        {"item": "ID card", "qty": 1, "size": "NA"},
+        {"item": "lanyard", "qty": 1, "size": "NA"},
+    ],
+    "core_team": [
+        {"item": "T-shirt", "qty": 1, "size": "capture_at_issue"},
+        {"item": "ID card", "qty": 1, "size": "NA"},
+        {"item": "lanyard", "qty": 1, "size": "NA"},
+    ],
+    "leader_escort": [
+        {"item": "ID card", "qty": 1, "size": "NA"},
+        {"item": "lanyard", "qty": 1, "size": "NA"},
+    ],
+}
+
 
 def read(name: str) -> list[dict[str, str]]:
     with Path(PACK, name).open(newline="", encoding="utf-8") as fh:
@@ -60,7 +90,130 @@ def parse_windows(value: str) -> list[dict[str, str]]:
     return windows
 
 
+def ensure_pack_extensions(db: Session, fid: int) -> None:
+    """Idempotently ensures inventory locations, aliases, merch items, merch config, and P_DUP flags exist."""
+    venues_by_name = {v.name: v for v in db.scalars(select(Venue).where(Venue.festival_id == fid))}
+    stock_locs = sorted({r["location"] for r in read("inventory_logistics.csv") if r.get("location")})
+    existing_locs = {loc.name: loc for loc in db.scalars(select(InventoryLocation).where(InventoryLocation.festival_id == fid))}
+
+    for loc_name in stock_locs:
+        if loc_name in existing_locs:
+            continue
+        v = venues_by_name.get(loc_name)
+        db.add(InventoryLocation(
+            festival_id=fid,
+            name=loc_name,
+            kind="venue_and_stock" if v else "stock_only",
+            venue_id=v.id if v else None,
+            venue_code=v.code if v else None,
+            matched_by_name=v is not None,
+            venue_confirmed=False,
+            position_unverified=(loc_name == "Van 1"),
+            position_note="Currently near Gate 2 loading bay (unverified)" if loc_name == "Van 1" else None,
+        ))
+    for v_name, v in venues_by_name.items():
+        if v_name not in existing_locs and v_name not in stock_locs:
+            db.add(InventoryLocation(
+                festival_id=fid,
+                name=v_name,
+                kind="venue_only",
+                venue_id=v.id,
+                venue_code=v.code,
+                matched_by_name=False,
+                venue_confirmed=True,
+                position_unverified=False,
+            ))
+
+    existing_aliases = {a.token for a in db.scalars(select(EquipmentAlias).where(EquipmentAlias.festival_id == fid))}
+    for token, target in DEFAULT_ALIASES:
+        if token not in existing_aliases:
+            db.add(EquipmentAlias(
+                festival_id=fid,
+                token=token,
+                target_item=target,
+                verified=True,
+                source="pack",
+            ))
+
+    existing_merch = {(m.item, m.size): m for m in db.scalars(select(MerchItem).where(MerchItem.festival_id == fid))}
+    for r in read("inventory_merch.csv"):
+        item_name = r["item"]
+        size_val = r["size"] or "NA"
+        if (item_name, size_val) in existing_merch:
+            continue
+        is_tshirt = item_name.lower() == "t-shirt"
+        db.add(MerchItem(
+            festival_id=fid,
+            code=f"{item_name}-{size_val}",
+            item=item_name,
+            size=size_val,
+            on_hand=int(r["quantity"]),
+            csv_reserved=int(r["reserved_quantity"]),
+            plan_reserved=0,
+            entitlement_rule="every_participant" if is_tshirt else "manual_only",
+            entitlement_confirmed=False,
+            max_per_person=10 if item_name.lower() == "winner medal" else 1,
+        ))
+
+    existing_cfg = db.scalar(select(MerchConfig).where(MerchConfig.festival_id == fid))
+    if not existing_cfg:
+        db.add(MerchConfig(
+            festival_id=fid,
+            assumptions_confirmed={
+                "A1": {"confirmed": False, "by": None, "at": None, "text": "quantity is total on hand INCLUDING reserved, so issuable = quantity minus reserved."},
+                "A2": {"confirmed": False, "by": None, "at": None, "text": "Every non-duplicate participant is entitled to one T-shirt in their declared size."},
+                "A3": {"confirmed": False, "by": None, "at": None, "text": "One unit per participant per item, except winner medals."},
+                "A4": {"confirmed": False, "by": None, "at": None, "text": "Merch stock is one pool: inventory_merch.csv has no location column."},
+            },
+            kit_templates=DEFAULT_KIT_TEMPLATES,
+            kit_confirmed=False,
+            staff_leader_quota=None,
+            substitution_rule={"max_steps": 1, "direction": "up_preferred"},
+            active_policy=None,
+            approved_plan=None,
+            plan_stale=False,
+            plan_stale_reasons=[],
+            tray_prep_status={},
+        ))
+
+    # Ensure P_DUP01 and P_DUP02 have probable_duplicate DataIssues
+    dup_issues = {
+        i.entity_code
+        for i in db.scalars(
+            select(DataIssue).where(
+                DataIssue.festival_id == fid,
+                DataIssue.entity_type == "participant",
+                DataIssue.issue == "possible_duplicate",
+            )
+        )
+    }
+    if "P_DUP01" not in dup_issues and db.scalar(select(Participant.id).where(Participant.festival_id == fid, Participant.code == "P_DUP01")):
+        db.add(DataIssue(
+            festival_id=fid,
+            entity_type="participant",
+            entity_code="P_DUP01",
+            issue="possible_duplicate",
+            detail="Probable duplicate of P0021 (Tanvi Das, IIM Kozhikode, age 25, size M, same arrival)",
+            status="open",
+        ))
+    if "P_DUP02" not in dup_issues and db.scalar(select(Participant.id).where(Participant.festival_id == fid, Participant.code == "P_DUP02")):
+        db.add(DataIssue(
+            festival_id=fid,
+            entity_type="participant",
+            entity_code="P_DUP02",
+            issue="possible_duplicate",
+            detail="Same name, contingent, age, size and arrival as P0119",
+            status="open",
+        ))
+    db.flush()
+
+
 def load_pack(db: Session) -> Festival:
+    existing_fest = db.scalar(select(Festival).where(Festival.slug == "aarohan-2026"))
+    if existing_fest:
+        ensure_pack_extensions(db, existing_fest.id)
+        return existing_fest
+
     festival = Festival(slug="aarohan-2026", name="Aarohan 2026", start_date=date(2026, 10, 30),
                         end_date=date(2026, 11, 1))
     db.add(festival)
@@ -139,6 +292,7 @@ def load_pack(db: Session) -> Festival:
             rounds=r["rounds"].split("|"), duration_minutes=int(r["duration_minutes"]),
             venue_requirements=blank(r["venue_requirements"]), equipment_needs=blank(r["equipment_needs"]),
             volunteers_needed=int(r["volunteers_needed"]))
+
     def stays_for(codes: set[str]) -> tuple[tuple[datetime, datetime], ...]:
         people = (participants[c] for c in codes)
         return tuple((p.arrival_at, p.departure_at) for p in people
@@ -211,6 +365,8 @@ def load_pack(db: Session) -> Festival:
                         quantity=int(r["quantity"]), reserved_quantity=int(r["reserved_quantity"])))
 
     db.add_all(issues)
+    db.flush()
+    ensure_pack_extensions(db, fid)
     counts = Counter(i.issue for i in issues)
     summaries = [
         ("import.participants", f"Imported {len(participants):,} participants from the data pack"),
@@ -257,5 +413,4 @@ def _load_accommodation(db: Session, fid: int) -> None:
                     gender_policy=blank(r["gender"]), capacity=int(r["capacity"]),
                     accessible={"yes": True, "no": False}.get(r["accessibility"].lower()), status=r["status"] or "unknown"))
     for r in external:
-        # ponytail: the pack gives beds per property, not rooms, so each property is one pooled room.
         db.add(Room(festival_id=fid, hostel_id=properties[r["property_id"]].id, code=f"{r['property_id']}-POOL", capacity=int(r["beds"])))

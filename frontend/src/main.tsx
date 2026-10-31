@@ -23,6 +23,7 @@ const Communication = page(() => import("./pages/Communication"), "Communication
 const Events = page(() => import("./pages/Events"), "Events");
 const Finance = page(() => import("./pages/Finance"), "Finance");
 const Login = page(() => import("./pages/Login"), "Login");
+const Merchandise = page(() => import("./pages/Merchandise"), "Merchandise");
 const Participants = page(() => import("./pages/Participants"), "Participants");
 const Ripple = page(() => import("./pages/Ripple"), "Ripple");
 const Safety = page(() => import("./pages/Safety"), "Safety");
@@ -62,6 +63,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="participants" element={<Participants />} />
             <Route path="accommodation" element={<Accommodation />} />
             <Route path="transportation" element={<Transport />} />
+            <Route path="merchandise" element={<Merchandise />} />
             <Route path="vendors" element={<Vendors />} />
             <Route path="volunteers" element={<Volunteers />} />
             <Route path="venues" element={<Venues />} />
