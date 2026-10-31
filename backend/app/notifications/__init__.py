@@ -20,5 +20,14 @@ def notify_roles(db: Session, festival_id: int, roles: Collection[str], title: s
     return len(notes)
 
 
+def alert_team(db: Session, festival_id: int, text: str) -> None:
+    """Message the team's Telegram chats once this transaction commits, and never if it rolls back.
+
+    Telegram is outside the portal, so keep this to counts, places and codes: no participant names,
+    no free-text descriptions, no reasons.
+    """
+    db.info.setdefault("team_alerts", []).append((festival_id, text))
+
+
 def roles_for_modules(modules: Collection[str]) -> set[str]:
     return {"festival_director"}.union(*(MODULE_ROLES.get(m, set()) for m in modules))

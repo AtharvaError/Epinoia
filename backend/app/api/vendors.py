@@ -14,6 +14,7 @@ from app.api.common import by_code, like
 from app.auth.deps import current_user, festival_access, require
 from app.database import get_db
 from app.models import AuditLog, DataIssue, Festival, Participant, Resource, User, Vendor, VendorInterruption
+from app.notifications import alert_team
 from app.services.audit import record
 
 router = APIRouter(prefix="/api/festivals/{festival_id}/vendors", tags=["vendors"])
@@ -1481,6 +1482,7 @@ def approve_vendor_interruption(
         after={"operational_status": "interrupted", "replacement_codes": valid_replacements},
         reason=body.reason,
     )
+    alert_team(db, festival.id, f"{vendor.name} ({vendor.code}) is unavailable. Cover: {', '.join(valid_replacements) or 'none assigned yet'}.")
     db.commit()
     return serialize_interruption(interruption)
 

@@ -14,6 +14,7 @@ from app.api import accommodation, analytics, assistant, auth, communication, ev
 from app.auth.deps import COOKIE, user_from_token
 from app.config import settings
 from app.database import SessionLocal
+from app.integrations.telegram import bot
 from app.models import Festival
 from app.notifications.live import hub
 
@@ -30,7 +31,18 @@ DOCS_PATHS = ("/api/docs", "/api/openapi.json")
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     hub.loop = asyncio.get_running_loop()
-    yield
+    telegram = asyncio.create_task(bot.run()) if bot.enabled else None
+    if telegram:
+        hub.alert = bot.alert
+    try:
+        yield
+    finally:
+        if telegram:
+            telegram.cancel()
+            try:
+                await telegram
+            except asyncio.CancelledError:
+                pass
 
 
 production = settings.environment == "production"

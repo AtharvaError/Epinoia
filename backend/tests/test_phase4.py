@@ -254,7 +254,7 @@ def test_tool_results_contain_no_participant_contact_details():
     ctx = context_for("admin@festos.test")
     phone = scalar("SELECT phone FROM participants ORDER BY id LIMIT 1")
     for tool in TOOLS:
-        args = {"query": "a", "day": "2026-10-31", "route_code": None, "event": "Chess", "venue": "LT-1"}
+        args = {"query": "a", "day": "2026-10-31", "route_code": None, "event": "Chess", "venue": "LT-1", "diet": None}
         assert phone not in str(execute(ctx, tool.name, {k: args[k] for k in tool.properties}))
 
 

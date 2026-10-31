@@ -8,13 +8,14 @@ from datetime import date
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.analytics.dashboard import dashboard
 from app.api.common import like
 from app.api.transport import affected_events
-from app.models import Department, Event, Festival, Incident, Registration, Route, Task, Venue, Volunteer, VolunteerShift
+from app.api.vendors import build_intelligence, day_label
+from app.models import AccommodationAllocation, Contingent, Department, Event, Festival, Incident, Participant, Registration, Resource, Route, Task, Venue, Volunteer, VolunteerShift
 from app.services.events import all_conflicts
 from app.services.finance import department_lines
 from app.services.housing import hospitality_budget, occupied_counts, open_rooms, unallocated_query
@@ -103,6 +104,37 @@ def open_incidents(ctx: Context, _: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"code": i.code, "category": i.category, "location": i.location, "priority": i.priority, "status": i.status, "assigned_team": i.assigned_team} for i in rows]
 
 
+def food_status(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
+    data = build_intelligence(ctx.db, ctx.festival)
+    names = {v["code"]: v["name"] for v in data["vendors"]}
+    wanted = (args.get("diet") or "").lower()
+    diets = [{"diet": r["label"], "people": r["participant_count"],
+              "days": [{"day": day_label(d["day"]), "state": d["state"], "vendors": [names[c] for c in d["clear"] + d["boundary"]]} for d in r["days"]]}
+             for r in data["dietary_intelligence"]["coverage_matrix"] if not wanted or wanted == r["key"]]
+    return {"overview": {k: data["overview"][k] for k in ("total_vendors", "confirmed_active_count", "unconfirmed_count", "interrupted_count", "certificates_expired", "dietary_coverage_gaps")},
+            "diets": diets, "fix_first": [{"action": f["action"], "why": f["why"]} for f in data["fix_first"][:3]]}
+
+
+def venue_status(ctx: Context, _: dict[str, Any]) -> dict[str, Any]:
+    fid = ctx.festival.id
+    venues = ctx.db.scalars(select(Venue).where(Venue.festival_id == fid, Venue.maintenance_status != "operational"))
+    stock = ctx.db.scalars(select(Resource).where(Resource.festival_id == fid, Resource.kind == "logistics", or_(Resource.condition != "good", Resource.condition.is_(None), Resource.reserved_quantity >= Resource.quantity)))
+    return {"venues_not_operational": [{"name": v.name, "status": v.maintenance_status} for v in venues],
+            "equipment_needing_attention": [{"name": r.name, "condition": r.condition or "unknown", "quantity": r.quantity, "reserved": r.reserved_quantity, "location": r.location} for r in stock]}
+
+
+def arrival_status(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
+    """Counts only: contingent leaders, escorts and individual participants stay in the portal."""
+    query = (select(Contingent.college, Contingent.strength_declared, func.count(Participant.id), func.count(AccommodationAllocation.check_in_at))
+             .outerjoin(Participant, and_(Participant.contingent_id == Contingent.id, Participant.deleted_at.is_(None)))
+             .outerjoin(AccommodationAllocation, and_(AccommodationAllocation.participant_id == Participant.id, AccommodationAllocation.status != "cancelled"))
+             .where(Contingent.festival_id == ctx.festival.id).group_by(Contingent.id).order_by(Contingent.college))
+    rows = ctx.db.execute(query).all()
+    term = (args.get("query") or "").lower()
+    return {"contingents": len(rows), "participants": sum(r[2] for r in rows), "checked_in_to_rooms": sum(r[3] for r in rows), "searched_for": term or None,
+            "matches": [{"college": c, "declared": declared, "registered": people, "checked_in_to_rooms": arrived} for c, declared, people, arrived in rows if term and term in c.lower()][:5]}
+
+
 def predict_venue_move(ctx: Context, args: dict[str, Any]) -> dict[str, Any]:
     """Runs the simulator's read-only calculation. Stores nothing and changes nothing."""
     event = ctx.db.scalar(select(Event).where(Event.festival_id == ctx.festival.id, Event.deleted_at.is_(None), Event.name.ilike(like(args["event"]), escape="\\")))
@@ -127,6 +159,10 @@ TOOLS = (
     Tool("budget_status", "Budget", "Approved, committed, pending and remaining budget by department.", "finance.read", NOTHING, budget_status),
     Tool("pending_tasks", "Pending tasks", "Unfinished tasks by department.", "volunteers.read", NOTHING, pending_tasks),
     Tool("open_incidents", "Incidents", "Incidents that are not resolved yet.", "incidents.read", NOTHING, open_incidents),
+    Tool("food_status", "Food and vendors", "Vendor availability, certificates, and which diets are covered each day. Pass a diet key, or null for all.", "vendors.read",
+         {"diet": {"type": ["string", "null"], "enum": ["nut-free", "jain", "vegan", "gluten-free", "vegetarian", "non-vegetarian", None]}}, food_status),
+    Tool("venue_status", "Venues and equipment", "Venues under maintenance or closed, and equipment that is damaged or fully reserved.", "venues.read", NOTHING, venue_status),
+    Tool("arrival_status", "Arrivals", "Contingent and participant counts, and how many have checked in to rooms. Pass a college name to look one up, or null for totals.", "participants.read", {"query": NULLABLE_TEXT}, arrival_status),
     Tool("predict_venue_move", "Venue move prediction", "Predict what moving an event to another venue would affect. Changes nothing.", "simulation.run",
          {"event": {"type": "string", "description": "Event name"}, "venue": {"type": "string", "description": "Venue name"}}, predict_venue_move),
 )
