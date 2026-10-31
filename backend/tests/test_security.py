@@ -8,10 +8,11 @@ from sqlalchemy import text
 
 from app.api.auth import failures
 from app.auth.permissions import ROLES
-from app.auth.verifier import issue_token
+from app.auth.verifier import hash_password, issue_token
 from app.config import Settings, settings
 from app.database import SessionLocal
 from app.main import app
+from app.models import Festival, Role, User
 from tests.helpers import client_for, festival_id
 
 PUBLIC = {("get", "/api/health"), ("get", "/api/ready"), ("post", "/api/auth/login"), ("post", "/api/auth/logout")}
@@ -50,18 +51,26 @@ def test_every_route_needs_a_session_except_the_public_ones():
     assert open_routes == []
 
 
-def test_a_person_with_no_permissions_is_refused_everywhere():
-    client = client_for("participant@festos.test")
+def test_the_portal_has_no_participant_login():
+    assert "participant" not in ROLES
+    failures.clear()
+    refused = TestClient(app).post("/api/auth/login", json={"email": "participant@festos.test", "password": settings.demo_password})
+    assert refused.status_code == 401
     with SessionLocal() as db:
-        db.execute(text("UPDATE users SET role_id=(SELECT id FROM roles WHERE key='participant') WHERE email='participant@festos.test'"))
+        assert db.scalar(text("SELECT count(*) FROM roles WHERE key='participant'")) == 0
+
+
+def test_a_person_with_no_permissions_is_refused_everywhere():
+    with SessionLocal() as db:
+        role = Role(key="no_access", name="No access")
+        db.add(role)
+        db.flush()
+        db.add(User(email="nobody@festos.test", password_hash=hash_password(settings.demo_password), name="Nobody", role_id=role.id, festival_id=db.query(Festival).first().id))
         db.commit()
-    granted = ROLES["participant"][1]
-    allowed = {"/api/festivals/{festival_id}/events", "/api/festivals/{festival_id}/events/{code}", "/api/festivals/{festival_id}/events/schedule", "/api/festivals/{festival_id}/events/conflicts",
-               "/api/festivals/{festival_id}/events/options", "/api/festivals/{festival_id}/announcements", "/api/festivals/{festival_id}/announcements/options"}
-    assert granted == {"events.read", "communication.read"}
+    client = client_for("nobody@festos.test")
     exposed = []
     for method, path in routes():
-        if (method, path) in PUBLIC or path in ANY_MEMBER or path in allowed or path.startswith(("/api/docs", "/api/openapi")):
+        if (method, path) in PUBLIC or path in ANY_MEMBER or path.startswith(("/api/docs", "/api/openapi")):
             continue
         status = call(client, method, path).status_code
         if status not in (403, 404, 405):

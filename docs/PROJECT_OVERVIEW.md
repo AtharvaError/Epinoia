@@ -114,7 +114,7 @@ Infra endpoints: `GET /api/health`, `GET /api/ready` (DB check), `WS /api/ws/{fe
 - The role matrix is in `app/auth/permissions.py` and seeded into
   `roles`/`permissions`/`role_permissions`. Roles: super_admin, festival_director,
   event_coordinator, accommodation_head, transport_head, volunteer_head, finance_head,
-  safety_coordinator, volunteer, participant.
+  safety_coordinator, volunteer.
 - **Server enforces** permissions (`require("finance.read")` etc.); the frontend only
   hides what a role cannot use. Contact/accessibility/medical details sit behind
   `participants.read_sensitive`.

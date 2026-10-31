@@ -70,7 +70,8 @@ restart the backend. The key stays on the server.
 
 ## Logins
 
-All accounts share the password in `DEMO_PASSWORD` in your `.env`.
+All accounts share the password in `DEMO_PASSWORD` in your `.env`. FestOS is for the core
+team only, so participants are records and have no logins.
 
 | Role | Email | Source |
 |---|---|---|
@@ -82,7 +83,6 @@ All accounts share the password in `DEMO_PASSWORD` in your `.env`.
 | Safety Coordinator | safety@festos.test | Simulated |
 | Volunteer Head | volunteers@festos.test | Simulated |
 | Volunteer | st07@festos.test | Core team |
-| Participant | participant@festos.test | Simulated |
 
 Every core team member can sign in as `<member_id>@festos.test`, for example
 `st01@festos.test`. Their role comes from the mapping in

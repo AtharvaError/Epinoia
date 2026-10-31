@@ -32,5 +32,4 @@ ROLES: dict[str, tuple[str, set[str]]] = {
         "participants.read", "participants.read_sensitive", "incidents.write", "vendors.write", "vendors.approve", "audit.read"}),
     "volunteer": ("Volunteer", {"events.read", "venues.read", "communication.read", "incidents.read", "incidents.report",
                                 "participants.checkin"}),
-    "participant": ("Participant", {"events.read", "communication.read"}),
 }
