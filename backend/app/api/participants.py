@@ -18,7 +18,7 @@ from app.auth.deps import current_user, festival_access, permissions_of, require
 from app.database import get_db
 from app.models import (
     AccommodationAllocation, Contingent, DataIssue, Event, Festival, Hostel, Participant, Registration, Room, Route,
-    TransportAssignment, User,
+    StaySuggestionLog, TransportAssignment, User,
 )
 from app.services.audit import record
 from app.services.events import participant_clashes
@@ -299,6 +299,16 @@ def get_participant(code: str, festival: Festival = Depends(festival_access), us
         select(Route).join(TransportAssignment, TransportAssignment.route_id == Route.id).where(TransportAssignment.participant_id == p.id))]
     row["issues"] = [{"issue": i.issue, "detail": i.detail} for i in db.scalars(
         select(DataIssue).where(DataIssue.festival_id == festival.id, DataIssue.entity_type == "participant", DataIssue.entity_code == code, DataIssue.status == "open"))]
+    suggs_count = db.scalar(
+        select(func.count(StaySuggestionLog.id)).where(
+            StaySuggestionLog.participant_id == p.id,
+            StaySuggestionLog.delivery_status.in_(("delivered", "copied")),
+        )
+    ) or 0
+    row["stay_suggestions_sent"] = suggs_count > 0
+    row["stay_suggestions_count"] = suggs_count
+    row["telegram_chat_id"] = p.telegram_chat_id
+    row["telegram_username"] = p.telegram_username
     return row
 
 

@@ -105,6 +105,46 @@ export interface SearchResult {
   subtitle: string;
 }
 
+export interface ExternalHotelItem {
+  id: number;
+  name: string;
+  address: string | null;
+  area: string | null;
+  latitude: number;
+  longitude: number;
+  phone: string | null;
+  alternate_phone: string | null;
+  price_min: number | null;
+  price_max: number | null;
+  price_display: string;
+  rating: number | null;
+  notes: string | null;
+  google_maps_link: string;
+  is_verified: boolean;
+  verified_by: string | null;
+  verified_at: string | null;
+  is_active: boolean;
+  distance_km: number;
+  travel_time_min: number;
+}
+
+export interface StaySuggestionHistoryItem {
+  id: number;
+  sent_at: string;
+  sent_by: string;
+  participant: {
+    id: number;
+    name: string;
+    code: string;
+  };
+  hotel_ids: number[];
+  hotel_names: string[];
+  delivery_channel: string;
+  delivery_status: string;
+  error_message: string | null;
+  message_text: string;
+}
+
 export interface Notifications {
   unread: number;
   items: { id: number; title: string; body: string | null; link: string | null; read: boolean; acknowledged: boolean; created_at: string }[];
